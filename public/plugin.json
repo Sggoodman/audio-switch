@@ -1,0 +1,14 @@
+{
+  "main": "index.html",
+  "logo": "logo.png",
+  "preload": "preload.js",
+  "features": [
+    {
+      "code": "audio-switcher",
+      "explain": "快捷键切换音频输出设备",
+      "cmds": [
+        "切换音频"
+      ]
+    }
+  ]
+}
