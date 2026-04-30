@@ -72,7 +72,7 @@ function getPreferredDevices() {
 }
 
 /**
- * 保存偏好切换设备
+ * 保存偏好切换设备（包含音量设置）
  */
 function savePreferredDevices(device1, device2) {
   try {
@@ -86,6 +86,74 @@ function savePreferredDevices(device1, device2) {
     }
     const result = window.utools.db.put(doc);
     return result.ok ? { success: true } : { success: false, message: '保存失败' };
+  } catch (e) {
+    return { success: false, message: e.message };
+  }
+}
+
+/**
+ * 获取指定音频设备的音量 (Windows)
+ * 返回 0-100 的整数值
+ */
+async function getWindowsDeviceVolume(deviceId) {
+  const script = `
+    ${PS_PREFIX}
+    try {
+      Import-Module AudioDeviceCmdlets -ErrorAction Stop
+      $device = Get-AudioDevice -List | Where-Object { $_.Type -eq 'Playback' -and $_.ID -eq '${deviceId}' }
+      if ($device) {
+        $volume = [int]($device.Volume * 100)
+        Write-Output "OK:$volume"
+      } else {
+        Write-Output 'ERROR:Device not found'
+      }
+    } catch {
+      Write-Output "ERROR:$($_.Exception.Message)"
+    }
+  `;
+  try {
+    const encodedScript = encodePowerShellScript(script.trim());
+    const output = await execPromise(`powershell -NoProfile -EncodedCommand ${encodedScript}`);
+    if (output.startsWith('ERROR:')) {
+      return null;
+    }
+    if (output.startsWith('OK:')) {
+      return parseInt(output.substring(3), 10);
+    }
+    return null;
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * 设置指定音频设备的音量 (Windows)
+ * volume: 0-100
+ */
+async function setWindowsDeviceVolume(deviceId, volume) {
+  const script = `
+    ${PS_PREFIX}
+    try {
+      Import-Module AudioDeviceCmdlets -ErrorAction Stop
+      $device = Get-AudioDevice -List | Where-Object { $_.Type -eq 'Playback' -and $_.ID -eq '${deviceId}' }
+      if ($device) {
+        $volumeValue = [double]${volume} / 100
+        $device | Set-AudioDevice -Volume $volumeValue -ErrorAction Stop | Out-Null
+        Write-Output 'OK'
+      } else {
+        Write-Output 'ERROR:Device not found'
+      }
+    } catch {
+      Write-Output "ERROR:$($_.Exception.Message)"
+    }
+  `;
+  try {
+    const encodedScript = encodePowerShellScript(script.trim());
+    const output = await execPromise(`powershell -NoProfile -EncodedCommand ${encodedScript}`);
+    if (output.startsWith('ERROR:')) {
+      return { success: false, message: output.substring(6) };
+    }
+    return output === 'OK' ? { success: true } : { success: false, message: output };
   } catch (e) {
     return { success: false, message: e.message };
   }
@@ -164,6 +232,15 @@ async function switchWindowsAudioDevice() {
         $device = Get-AudioDevice -List | Where-Object { $_.Type -eq 'Playback' -and $_.ID -eq $targetId }
         if ($device) {
           $device | Set-AudioDevice -ErrorAction Stop | Out-Null
+          # 设置音量（如果配置中存在）
+          $volume = '${preferred.device1.volume ?? ''}'
+          if ($targetId -eq '${id2}') {
+            $volume = '${preferred.device2.volume ?? ''}'
+          }
+          if ($volume -ne '') {
+            $volumeValue = [double]$volume / 100
+            $device | Set-AudioDevice -Volume $volumeValue -ErrorAction Stop | Out-Null
+          }
           Write-Output "OK:$($device.Name)"
         } else {
           Write-Output 'ERROR:Device not found'
@@ -473,5 +550,28 @@ window.services = {
     if (window.utools && window.utools.redirectHotKeySetting) {
       window.utools.redirectHotKeySetting('切换音频');
     }
+  },
+
+  /**
+   * 获取设备音量 (Windows)
+   */
+  getDeviceVolume: async (deviceId) => {
+    const platform = getPlatform();
+    if (platform === 'win32') {
+      return getWindowsDeviceVolume(deviceId);
+    }
+    // macOS 和 Linux 暂不支持
+    return null;
+  },
+
+  /**
+   * 设置设备音量 (Windows)
+   */
+  setDeviceVolume: async (deviceId, volume) => {
+    const platform = getPlatform();
+    if (platform === 'win32') {
+      return setWindowsDeviceVolume(deviceId, volume);
+    }
+    return { success: false, message: '当前平台不支持设置音量' };
   }
 };

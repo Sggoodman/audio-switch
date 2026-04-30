@@ -16,7 +16,9 @@ import {
   Select,
   MenuItem,
   FormControl,
-  InputLabel
+  InputLabel,
+  Slider,
+  Grid
 } from '@mui/material'
 import SpeakerIcon from '@mui/icons-material/Speaker'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
@@ -24,7 +26,6 @@ import KeyboardIcon from '@mui/icons-material/Keyboard'
 import InfoIcon from '@mui/icons-material/Info'
 import VolumeUpIcon from '@mui/icons-material/VolumeUp'
 import SwapHorizIcon from '@mui/icons-material/SwapHoriz'
-
 const THEME_DIC = {
   light: createTheme({
     palette: {
@@ -61,6 +62,8 @@ export default function App() {
   const [switchResult, setSwitchResult] = useState(null)
   const [selectedDevice1, setSelectedDevice1] = useState('')
   const [selectedDevice2, setSelectedDevice2] = useState('')
+  const [volume1, setVolume1] = useState(50)
+  const [volume2, setVolume2] = useState(50)
   const [saveStatus, setSaveStatus] = useState(null)
 
   const loadDevices = useCallback(async () => {
@@ -123,6 +126,8 @@ export default function App() {
         if (preferred) {
           setSelectedDevice1(preferred.device1?.id || '')
           setSelectedDevice2(preferred.device2?.id || '')
+          setVolume1(preferred.device1?.volume ?? 50)
+          setVolume2(preferred.device2?.volume ?? 50)
         }
       } else {
         setLoading(false)
@@ -161,8 +166,8 @@ export default function App() {
     const dev2 = devices.find(d => d.id === selectedDevice2)
     if (!dev1 || !dev2) return
     const result = window.services.savePreferredDevices(
-      { id: dev1.id, name: dev1.name },
-      { id: dev2.id, name: dev2.name }
+      { id: dev1.id, name: dev1.name, volume: volume1 },
+      { id: dev2.id, name: dev2.name, volume: volume2 }
     )
     if (result.success) {
       setSaveStatus({ type: 'success', message: '配置已保存' })
@@ -170,6 +175,16 @@ export default function App() {
       setSaveStatus({ type: 'error', message: result.message })
     }
     setTimeout(() => setSaveStatus(null), 2000)
+  }
+
+  const handleTestVolume = async (deviceId, volume) => {
+    const result = await window.services.setDeviceVolume(deviceId, volume)
+    if (result.success) {
+      window.utools.showNotification('音量已设置')
+      await loadDevices()
+    } else {
+      window.utools.showNotification(`设置失败: ${result.message}`)
+    }
   }
 
   return (
@@ -291,41 +306,84 @@ export default function App() {
                 <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
                   选择两个常用设备，快捷键将在它们之间互相切换。若当前设备不在此列表中，将切换到设备 A。
                 </Typography>
-                <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mb: 1.5 }}>
-                  <FormControl size="small" sx={{ flex: 1 }}>
-                    <InputLabel>设备 A</InputLabel>
-                    <Select
-                      value={selectedDevice1}
-                      label="设备 A"
-                      onChange={e => setSelectedDevice1(e.target.value)}
-                    >
-                      {devices.map(d => (
-                        <MenuItem key={d.id} value={d.id}>{d.name}</MenuItem>
-                      ))}
-                    </Select>
-                  </FormControl>
-                  <SwapHorizIcon color="action" />
-                  <FormControl size="small" sx={{ flex: 1 }}>
-                    <InputLabel>设备 B</InputLabel>
-                    <Select
-                      value={selectedDevice2}
-                      label="设备 B"
-                      onChange={e => setSelectedDevice2(e.target.value)}
-                    >
-                      {devices.map(d => (
-                        <MenuItem key={d.id} value={d.id}>{d.name}</MenuItem>
-                      ))}
-                    </Select>
-                  </FormControl>
+                <Grid container spacing={2}>
+                  <Grid item xs={6}>
+                    <FormControl size="small" fullWidth sx={{ mb: 1 }}>
+                      <InputLabel>设备 A</InputLabel>
+                      <Select
+                        value={selectedDevice1}
+                        label="设备 A"
+                        onChange={e => setSelectedDevice1(e.target.value)}
+                      >
+                        {devices.map(d => (
+                          <MenuItem key={d.id} value={d.id}>{d.name}</MenuItem>
+                        ))}
+                      </Select>
+                    </FormControl>
+                    <Typography variant="caption" color="text.secondary">
+                      预设音量: {volume1}%
+                    </Typography>
+                    <Slider
+                      value={volume1}
+                      onChange={e => setVolume1(e.target.value)}
+                      min={0}
+                      max={100}
+                      size="small"
+                      sx={{ mt: 0.5 }}
+                    />
+                  </Grid>
+                  <Grid item xs={6}>
+                    <FormControl size="small" fullWidth sx={{ mb: 1 }}>
+                      <InputLabel>设备 B</InputLabel>
+                      <Select
+                        value={selectedDevice2}
+                        label="设备 B"
+                        onChange={e => setSelectedDevice2(e.target.value)}
+                      >
+                        {devices.map(d => (
+                          <MenuItem key={d.id} value={d.id}>{d.name}</MenuItem>
+                        ))}
+                      </Select>
+                    </FormControl>
+                    <Typography variant="caption" color="text.secondary">
+                      预设音量: {volume2}%
+                    </Typography>
+                    <Slider
+                      value={volume2}
+                      onChange={e => setVolume2(e.target.value)}
+                      min={0}
+                      max={100}
+                      size="small"
+                      sx={{ mt: 0.5 }}
+                    />
+                  </Grid>
+                </Grid>
+                <Box sx={{ display: 'flex', gap: 1, mt: 1.5 }}>
+                  <Button
+                    variant="contained"
+                    size="small"
+                    onClick={handleSavePreferred}
+                    disabled={!selectedDevice1 || !selectedDevice2 || selectedDevice1 === selectedDevice2}
+                  >
+                    保存配置
+                  </Button>
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    onClick={() => selectedDevice1 && handleTestVolume(selectedDevice1, volume1)}
+                    disabled={!selectedDevice1}
+                  >
+                    测试设备 A 音量
+                  </Button>
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    onClick={() => selectedDevice2 && handleTestVolume(selectedDevice2, volume2)}
+                    disabled={!selectedDevice2}
+                  >
+                    测试设备 B 音量
+                  </Button>
                 </Box>
-                <Button
-                  variant="contained"
-                  size="small"
-                  onClick={handleSavePreferred}
-                  disabled={!selectedDevice1 || !selectedDevice2 || selectedDevice1 === selectedDevice2}
-                >
-                  保存配置
-                </Button>
                 {saveStatus && (
                   <Alert
                     severity={saveStatus.type}
