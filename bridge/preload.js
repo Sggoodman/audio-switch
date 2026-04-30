@@ -46,11 +46,58 @@ function encodePowerShellScript(script) {
 }
 
 /**
+ * 生成修复 PSModulePath 的 PowerShell 前缀
+ * 解决模块安装在 PowerShell 7 路径但用 PowerShell 5.x 运行时找不到的问题
+ * 同时设置 UTF-8 输出编码，解决中文乱码问题
+ */
+const PS_PREFIX = `
+  [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+  $docsPath = [Environment]::GetFolderPath('MyDocuments')
+  $ps7Modules = "$docsPath\\PowerShell\\Modules"
+  if (Test-Path $ps7Modules) {
+    $env:PSModulePath = "$ps7Modules;$env:PSModulePath"
+  }
+`.trim();
+
+/**
+ * 获取偏好切换设备（使用 utools.db 持久化存储）
+ */
+function getPreferredDevices() {
+  try {
+    const doc = window.utools.db.get('preferred_devices');
+    return doc ? doc.data : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * 保存偏好切换设备
+ */
+function savePreferredDevices(device1, device2) {
+  try {
+    const existing = window.utools.db.get('preferred_devices');
+    const doc = {
+      _id: 'preferred_devices',
+      data: { device1, device2 }
+    };
+    if (existing && existing._rev) {
+      doc._rev = existing._rev;
+    }
+    const result = window.utools.db.put(doc);
+    return result.ok ? { success: true } : { success: false, message: '保存失败' };
+  } catch (e) {
+    return { success: false, message: e.message };
+  }
+}
+
+/**
  * Windows: 使用 PowerShell 获取音频输出设备
  */
 async function getWindowsAudioDevices() {
-  // 尝试使用 AudioDeviceCmdlets 模块
   const script = `
+    ${PS_PREFIX}
+    $ErrorActionPreference = 'Stop'
     try {
       Import-Module AudioDeviceCmdlets -ErrorAction Stop
       $devices = Get-AudioDevice -List | Where-Object { $_.Type -eq 'Playback' }
@@ -64,60 +111,98 @@ async function getWindowsAudioDevices() {
       }
       $result | ConvertTo-Json -Compress
     } catch {
-      Write-Output 'ERROR:AudioDeviceCmdlets not installed'
+      Write-Output "ERROR:$($_.Exception.Message)"
     }
   `;
 
   try {
     const encodedScript = encodePowerShellScript(script.trim());
     const output = await execPromise(`powershell -NoProfile -EncodedCommand ${encodedScript}`);
-    if (output.includes('ERROR:AudioDeviceCmdlets not installed')) {
-      return { error: 'AudioDeviceCmdlets', message: '请安装 AudioDeviceCmdlets 模块', hint: '在 PowerShell 中运行: Install-Module -Name AudioDeviceCmdlets -Force' };
+    if (output.startsWith('ERROR:')) {
+      const errorMsg = output.substring(6);
+      return {
+        error: 'AudioDeviceCmdlets',
+        message: 'AudioDeviceCmdlets 加载失败',
+        hint: `错误: ${errorMsg}`
+      };
     }
     const parsed = JSON.parse(output);
     // PowerShell ConvertTo-Json 对单元素数组返回对象，需转换为数组
     if (parsed && !Array.isArray(parsed) && parsed.name && parsed.id) {
       return [parsed];
     }
-    return parsed;
+    return parsed || [];
   } catch (e) {
-    // 备选方案：使用 systeminfo 或其他方法
-    return { error: 'failed', message: e.message };
+    return { error: 'failed', message: `执行失败: ${e.message}` };
   }
 }
 
 /**
- * Windows: 切换到下一个音频输出设备
+ * Windows: 切换音频输出设备
+ * 如果设置了偏好设备，在两个偏好设备之间互相切换
+ * 否则在所有 Playback 设备之间循环切换
  */
 async function switchWindowsAudioDevice() {
-  const script = `
-    try {
-      Import-Module AudioDeviceCmdlets -ErrorAction Stop
-      $current = Get-AudioDevice -Playback | Select-Object -ExpandProperty ID
-      $devices = Get-AudioDevice -List | Where-Object { $_.Type -eq 'Playback' -and $_.State -eq 'Active' }
-      $count = $devices.Count
-      if ($count -lt 2) {
-        Write-Output 'ERROR:No alternative device'
-        return
+  const preferred = getPreferredDevices();
+  let script;
+
+  if (preferred && preferred.device1 && preferred.device2) {
+    // 双设备互相切换模式
+    const id1 = preferred.device1.id;
+    const id2 = preferred.device2.id;
+    script = `
+      ${PS_PREFIX}
+      try {
+        Import-Module AudioDeviceCmdlets -ErrorAction Stop
+        $current = Get-AudioDevice -Playback | Select-Object -ExpandProperty ID
+        $targetId = ''
+        if ($current -eq '${id1}') {
+          $targetId = '${id2}'
+        } else {
+          $targetId = '${id1}'
+        }
+        $device = Get-AudioDevice -List | Where-Object { $_.Type -eq 'Playback' -and $_.ID -eq $targetId }
+        if ($device) {
+          $device | Set-AudioDevice -ErrorAction Stop | Out-Null
+          Write-Output "OK:$($device.Name)"
+        } else {
+          Write-Output 'ERROR:Device not found'
+        }
+      } catch {
+        Write-Output "ERROR:$($_.Exception.Message)"
       }
-      $found = $false
-      foreach ($dev in $devices) {
-        if ($found) {
-          $dev | Set-AudioDevice -ErrorAction Stop
-          Write-Output "OK:$($dev.Name)"
+    `;
+  } else {
+    // 循环切换模式
+    script = `
+      ${PS_PREFIX}
+      try {
+        Import-Module AudioDeviceCmdlets -ErrorAction Stop
+        $current = Get-AudioDevice -Playback | Select-Object -ExpandProperty ID
+        $devices = Get-AudioDevice -List | Where-Object { $_.Type -eq 'Playback' }
+        $count = $devices.Count
+        if ($count -lt 2) {
+          Write-Output 'ERROR:No alternative device'
           return
         }
-        if ($dev.ID -eq $current) {
-          $found = $true
+        $found = $false
+        foreach ($dev in $devices) {
+          if ($found) {
+            $dev | Set-AudioDevice -ErrorAction Stop | Out-Null
+            Write-Output "OK:$($dev.Name)"
+            return
+          }
+          if ($dev.ID -eq $current) {
+            $found = $true
+          }
         }
+        $devices[0] | Set-AudioDevice -ErrorAction Stop | Out-Null
+        Write-Output "OK:$($devices[0].Name)"
+      } catch {
+        Write-Output "ERROR:$($_.Exception.Message)"
       }
-      # 循环到第一个
-      $devices[0] | Set-AudioDevice -ErrorAction Stop
-      Write-Output "OK:$($devices[0].Name)"
-    } catch {
-      Write-Output "ERROR:$($_.Exception.Message)"
-    }
-  `;
+    `;
+  }
 
   try {
     const encodedScript = encodePowerShellScript(script.trim());
@@ -272,10 +357,29 @@ async function checkRequirements() {
   const platform = getPlatform();
 
   if (platform === 'win32') {
-    // 检查是否安装了 AudioDeviceCmdlets
+    const checkScript = `
+      ${PS_PREFIX}
+      $ErrorActionPreference = 'Stop'
+      try {
+        Import-Module AudioDeviceCmdlets -ErrorAction Stop
+        Get-AudioDevice -List -ErrorAction Stop | Out-Null
+        Write-Output 'OK'
+      } catch {
+        Write-Output "ERROR:$($_.Exception.Message)"
+      }
+    `;
     try {
-      await execPromise('powershell -NoProfile -Command "Import-Module AudioDeviceCmdlets -ErrorAction Stop"');
-      return { ready: true, platform };
+      const encodedScript = encodePowerShellScript(checkScript.trim());
+      const output = await execPromise(`powershell -NoProfile -EncodedCommand ${encodedScript}`);
+      if (output === 'OK') {
+        return { ready: true, platform };
+      }
+      return {
+        ready: false,
+        platform,
+        message: '需要安装 AudioDeviceCmdlets 模块',
+        hint: '在 PowerShell 中运行: Install-Module -Name AudioDeviceCmdlets -Force'
+      };
     } catch (e) {
       return {
         ready: false,
@@ -305,7 +409,22 @@ async function checkRequirements() {
   return { ready: false, message: '不支持的平台' };
 }
 
-// 暴露服务接口
+/**
+ * 通用切换逻辑（根据平台分发）
+ */
+async function switchAudioDevice() {
+  const platform = getPlatform();
+  if (platform === 'win32') {
+    return switchWindowsAudioDevice();
+  } else if (platform === 'darwin') {
+    return switchMacAudioDevice();
+  } else if (platform === 'linux') {
+    return switchLinuxAudioDevice();
+  }
+  return { success: false, message: '不支持的平台' };
+}
+
+// 暴露服务接口（供 UI 界面使用）
 window.services = {
   /**
    * 获取平台信息
@@ -335,17 +454,17 @@ window.services = {
   /**
    * 切换到下一个音频输出设备
    */
-  switchAudioDevice: async () => {
-    const platform = getPlatform();
-    if (platform === 'win32') {
-      return switchWindowsAudioDevice();
-    } else if (platform === 'darwin') {
-      return switchMacAudioDevice();
-    } else if (platform === 'linux') {
-      return switchLinuxAudioDevice();
-    }
-    return { success: false, message: '不支持的平台' };
-  },
+  switchAudioDevice: () => switchAudioDevice(),
+
+  /**
+   * 获取偏好切换设备
+   */
+  getPreferredDevices: () => getPreferredDevices(),
+
+  /**
+   * 保存偏好切换设备
+   */
+  savePreferredDevices: (device1, device2) => savePreferredDevices(device1, device2),
 
   /**
    * 跳转到快捷键设置页面

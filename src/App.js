@@ -13,14 +13,17 @@ import {
   Chip,
   Card,
   CardContent,
-  Divider
+  Select,
+  MenuItem,
+  FormControl,
+  InputLabel
 } from '@mui/material'
 import SpeakerIcon from '@mui/icons-material/Speaker'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import KeyboardIcon from '@mui/icons-material/Keyboard'
-import SwapHorizIcon from '@mui/icons-material/SwapHoriz'
-import ComputerIcon from '@mui/icons-material/Computer'
+import InfoIcon from '@mui/icons-material/Info'
 import VolumeUpIcon from '@mui/icons-material/VolumeUp'
+import SwapHorizIcon from '@mui/icons-material/SwapHoriz'
 
 const THEME_DIC = {
   light: createTheme({
@@ -52,10 +55,13 @@ export default function App() {
   const [loading, setLoading] = useState(true)
   const [devices, setDevices] = useState([])
   const [error, setError] = useState(null)
-  const [switching, setSwitching] = useState(false)
-  const [switchResult, setSwitchResult] = useState(null)
   const [platform, setPlatform] = useState(null)
   const [requirements, setRequirements] = useState(null)
+  const [switching, setSwitching] = useState(false)
+  const [switchResult, setSwitchResult] = useState(null)
+  const [selectedDevice1, setSelectedDevice1] = useState('')
+  const [selectedDevice2, setSelectedDevice2] = useState('')
+  const [saveStatus, setSaveStatus] = useState(null)
 
   const loadDevices = useCallback(async () => {
     try {
@@ -81,8 +87,17 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    window.utools.onPluginEnter(({ code, type, payload, from }) => {
-      // 路由分发
+    window.utools.onPluginEnter(({ code }) => {
+      if (code === 'audio-quick-switch') {
+        window.services.switchAudioDevice().then(result => {
+          if (result.success) {
+            window.utools.showNotification(`已切换到: ${result.deviceName}`)
+          } else {
+            window.utools.showNotification(`切换失败: ${result.message}`)
+          }
+          window.utools.outPlugin()
+        })
+      }
     })
 
     window.utools.onPluginOut(() => {
@@ -103,6 +118,12 @@ export default function App() {
 
       if (req.ready) {
         await loadDevices()
+        // 加载偏好设备配置
+        const preferred = window.services.getPreferredDevices()
+        if (preferred) {
+          setSelectedDevice1(preferred.device1?.id || '')
+          setSelectedDevice2(preferred.device2?.id || '')
+        }
       } else {
         setLoading(false)
       }
@@ -132,6 +153,23 @@ export default function App() {
 
   const handleRefresh = () => {
     loadDevices()
+  }
+
+  const handleSavePreferred = () => {
+    if (!selectedDevice1 || !selectedDevice2 || selectedDevice1 === selectedDevice2) return
+    const dev1 = devices.find(d => d.id === selectedDevice1)
+    const dev2 = devices.find(d => d.id === selectedDevice2)
+    if (!dev1 || !dev2) return
+    const result = window.services.savePreferredDevices(
+      { id: dev1.id, name: dev1.name },
+      { id: dev2.id, name: dev2.name }
+    )
+    if (result.success) {
+      setSaveStatus({ type: 'success', message: '配置已保存' })
+    } else {
+      setSaveStatus({ type: 'error', message: result.message })
+    }
+    setTimeout(() => setSaveStatus(null), 2000)
   }
 
   return (
@@ -186,19 +224,6 @@ export default function App() {
             </Alert>
           )}
 
-          {/* 操作结果 */}
-          {switchResult && (
-            <Alert
-              severity={switchResult.success ? 'success' : 'error'}
-              sx={{ mb: 2 }}
-              onClose={() => setSwitchResult(null)}
-            >
-              {switchResult.success
-                ? `已切换到: ${switchResult.deviceName}`
-                : `切换失败: ${switchResult.message}`}
-            </Alert>
-          )}
-
           {/* 加载状态 */}
           {loading && (
             <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
@@ -243,11 +268,83 @@ export default function App() {
             </Card>
           )}
 
-          {/* 说明 */}
+          {/* 切换结果 */}
+          {switchResult && (
+            <Alert
+              severity={switchResult.success ? 'success' : 'error'}
+              sx={{ mb: 2, mt: 1 }}
+              onClose={() => setSwitchResult(null)}
+            >
+              {switchResult.success
+                ? `已切换到: ${switchResult.deviceName}`
+                : `切换失败: ${switchResult.message}`}
+            </Alert>
+          )}
+
+          {/* 偏好设备选择 */}
           {!loading && requirements?.ready && devices.length >= 2 && (
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-              点击「切换音频」可将输出切换到下一个设备。您也可以设置全局快捷键来快速切换。
-            </Typography>
+            <Card sx={{ mb: 2, mt: 1 }}>
+              <CardContent>
+                <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1 }}>
+                  快捷切换设置
+                </Typography>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+                  选择两个常用设备，快捷键将在它们之间互相切换。若当前设备不在此列表中，将切换到设备 A。
+                </Typography>
+                <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mb: 1.5 }}>
+                  <FormControl size="small" sx={{ flex: 1 }}>
+                    <InputLabel>设备 A</InputLabel>
+                    <Select
+                      value={selectedDevice1}
+                      label="设备 A"
+                      onChange={e => setSelectedDevice1(e.target.value)}
+                    >
+                      {devices.map(d => (
+                        <MenuItem key={d.id} value={d.id}>{d.name}</MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                  <SwapHorizIcon color="action" />
+                  <FormControl size="small" sx={{ flex: 1 }}>
+                    <InputLabel>设备 B</InputLabel>
+                    <Select
+                      value={selectedDevice2}
+                      label="设备 B"
+                      onChange={e => setSelectedDevice2(e.target.value)}
+                    >
+                      {devices.map(d => (
+                        <MenuItem key={d.id} value={d.id}>{d.name}</MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                </Box>
+                <Button
+                  variant="contained"
+                  size="small"
+                  onClick={handleSavePreferred}
+                  disabled={!selectedDevice1 || !selectedDevice2 || selectedDevice1 === selectedDevice2}
+                >
+                  保存配置
+                </Button>
+                {saveStatus && (
+                  <Alert
+                    severity={saveStatus.type}
+                    sx={{ mt: 1, py: 0 }}
+                  >
+                    {saveStatus.message}
+                  </Alert>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* 使用说明 */}
+          {!loading && requirements?.ready && (
+            <Alert severity="info" sx={{ mb: 2 }} icon={<InfoIcon />}>
+              <Typography variant="body2">
+                在 uTools 输入「快捷切换音频」可一键切换设备。建议为该指令绑定全局快捷键。
+              </Typography>
+            </Alert>
           )}
         </Box>
 
@@ -267,7 +364,7 @@ export default function App() {
             onClick={handleSwitch}
             disabled={loading || switching || !requirements?.ready || devices.length < 2}
           >
-            {switching ? '切换中...' : '切换音频'}
+            {switching ? '切换中...' : '立即切换'}
           </Button>
           <Button
             variant="outlined"
