@@ -10,7 +10,6 @@ import {
   Button,
   Alert,
   CircularProgress,
-  Chip,
   Card,
   CardContent,
   Select,
@@ -18,7 +17,8 @@ import {
   FormControl,
   InputLabel,
   Slider,
-  Grid
+  Switch,
+  FormControlLabel
 } from '@mui/material'
 import SpeakerIcon from '@mui/icons-material/Speaker'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
@@ -26,6 +26,7 @@ import KeyboardIcon from '@mui/icons-material/Keyboard'
 import InfoIcon from '@mui/icons-material/Info'
 import VolumeUpIcon from '@mui/icons-material/VolumeUp'
 import SwapHorizIcon from '@mui/icons-material/SwapHoriz'
+
 const THEME_DIC = {
   light: createTheme({
     palette: {
@@ -45,26 +46,19 @@ const THEME_DIC = {
   })
 }
 
-const platformLabels = {
-  win32: 'Windows',
-  darwin: 'macOS',
-  linux: 'Linux'
-}
-
 export default function App() {
   const [theme, setTheme] = useState(window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
   const [loading, setLoading] = useState(true)
   const [devices, setDevices] = useState([])
   const [error, setError] = useState(null)
-  const [platform, setPlatform] = useState(null)
   const [requirements, setRequirements] = useState(null)
   const [switching, setSwitching] = useState(false)
-  const [switchResult, setSwitchResult] = useState(null)
   const [selectedDevice1, setSelectedDevice1] = useState('')
   const [selectedDevice2, setSelectedDevice2] = useState('')
   const [volume1, setVolume1] = useState(50)
   const [volume2, setVolume2] = useState(50)
   const [saveStatus, setSaveStatus] = useState(null)
+  const [notificationEnabled, setNotificationEnabled] = useState(true)
 
   const loadDevices = useCallback(async () => {
     try {
@@ -93,12 +87,11 @@ export default function App() {
     window.utools.onPluginEnter(({ code }) => {
       if (code === 'audio-quick-switch') {
         window.services.switchAudioDevice().then(result => {
-          if (result.success) {
-            window.utools.showNotification(`已切换到: ${result.deviceName}`)
-          } else {
-            window.utools.showNotification(`切换失败: ${result.message}`)
-          }
-          window.utools.outPlugin()
+          const msg = result.success
+            ? `已切换到: ${result.deviceName}`
+            : `切换失败: ${result.message}`
+          window.services.notify(msg, !result.success)
+          setTimeout(() => window.utools.outPlugin(), 500)
         })
       }
     })
@@ -113,9 +106,6 @@ export default function App() {
 
     // 初始化
     const init = async () => {
-      const p = await window.services.getPlatform()
-      setPlatform(p)
-
       const req = await window.services.checkRequirements()
       setRequirements(req)
 
@@ -129,6 +119,9 @@ export default function App() {
           setVolume1(preferred.device1?.volume ?? 50)
           setVolume2(preferred.device2?.volume ?? 50)
         }
+        // 加载通知设置
+        const settings = window.services.getSettings()
+        setNotificationEnabled(settings.notificationEnabled !== false)
       } else {
         setLoading(false)
       }
@@ -139,14 +132,19 @@ export default function App() {
   const handleSwitch = async () => {
     try {
       setSwitching(true)
-      setSwitchResult(null)
       const result = await window.services.switchAudioDevice()
-      setSwitchResult(result)
+      const msg = result.success
+        ? `已切换到: ${result.deviceName}`
+        : `切换失败: ${result.message}`
+      window.services.notify(msg, !result.success)
       if (result.success) {
-        await loadDevices()
+        setDevices(prev => prev.map(d => ({
+          ...d,
+          isDefault: d.name === result.deviceName
+        })))
       }
     } catch (e) {
-      setSwitchResult({ success: false, message: e.message })
+      window.services.notify(`切换失败: ${e.message}`, true)
     } finally {
       setSwitching(false)
     }
@@ -165,26 +163,27 @@ export default function App() {
     const dev1 = devices.find(d => d.id === selectedDevice1)
     const dev2 = devices.find(d => d.id === selectedDevice2)
     if (!dev1 || !dev2) return
-    const result = window.services.savePreferredDevices(
+
+    // 保存偏好设备
+    const result1 = window.services.savePreferredDevices(
       { id: dev1.id, name: dev1.name, volume: volume1 },
       { id: dev2.id, name: dev2.name, volume: volume2 }
     )
-    if (result.success) {
+
+    // 保存通知设置
+    const result2 = window.services.saveSettings({ notificationEnabled })
+
+    if (result1.success && result2.success) {
       setSaveStatus({ type: 'success', message: '配置已保存' })
     } else {
-      setSaveStatus({ type: 'error', message: result.message })
+      setSaveStatus({ type: 'error', message: result1.message || result2.message })
     }
     setTimeout(() => setSaveStatus(null), 2000)
   }
 
   const handleTestVolume = async (deviceId, volume) => {
-    const result = await window.services.setDeviceVolume(deviceId, volume)
-    if (result.success) {
-      window.utools.showNotification('音量已设置')
-      await loadDevices()
-    } else {
-      window.utools.showNotification(`设置失败: ${result.message}`)
-    }
+    await window.services.setDeviceVolume(deviceId, volume)
+    await loadDevices()
   }
 
   return (
@@ -209,11 +208,8 @@ export default function App() {
         }}>
           <VolumeUpIcon color="primary" />
           <Typography variant="h6" sx={{ fontWeight: 600 }}>
-            音频输出切换
+            音频输出设置
           </Typography>
-          {platform && (
-            <Chip label={platformLabels[platform] || platform} size="small" />
-          )}
         </Box>
 
         {/* Content */}
@@ -283,19 +279,6 @@ export default function App() {
             </Card>
           )}
 
-          {/* 切换结果 */}
-          {switchResult && (
-            <Alert
-              severity={switchResult.success ? 'success' : 'error'}
-              sx={{ mb: 2, mt: 1 }}
-              onClose={() => setSwitchResult(null)}
-            >
-              {switchResult.success
-                ? `已切换到: ${switchResult.deviceName}`
-                : `切换失败: ${switchResult.message}`}
-            </Alert>
-          )}
-
           {/* 偏好设备选择 */}
           {!loading && requirements?.ready && devices.length >= 2 && (
             <Card sx={{ mb: 2, mt: 1 }}>
@@ -306,22 +289,37 @@ export default function App() {
                 <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
                   选择两个常用设备，快捷键将在它们之间互相切换。若当前设备不在此列表中，将切换到设备 A。
                 </Typography>
-                <Grid container spacing={2}>
-                  <Grid item xs={6}>
-                    <FormControl size="small" fullWidth sx={{ mb: 1 }}>
-                      <InputLabel>设备 A</InputLabel>
-                      <Select
-                        value={selectedDevice1}
-                        label="设备 A"
-                        onChange={e => setSelectedDevice1(e.target.value)}
-                      >
-                        {devices.map(d => (
-                          <MenuItem key={d.id} value={d.id}>{d.name}</MenuItem>
-                        ))}
-                      </Select>
-                    </FormControl>
+                <Box sx={{ display: 'flex', gap: 2, mb: 1.5 }}>
+                  <FormControl size="small" sx={{ flex: 1 }}>
+                    <InputLabel>设备 A</InputLabel>
+                    <Select
+                      value={selectedDevice1}
+                      label="设备 A"
+                      onChange={e => setSelectedDevice1(e.target.value)}
+                    >
+                      {devices.map(d => (
+                        <MenuItem key={d.id} value={d.id}>{d.name}</MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                  <SwapHorizIcon color="action" sx={{ alignSelf: 'center' }} />
+                  <FormControl size="small" sx={{ flex: 1 }}>
+                    <InputLabel>设备 B</InputLabel>
+                    <Select
+                      value={selectedDevice2}
+                      label="设备 B"
+                      onChange={e => setSelectedDevice2(e.target.value)}
+                    >
+                      {devices.map(d => (
+                        <MenuItem key={d.id} value={d.id}>{d.name}</MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                </Box>
+                <Box sx={{ display: 'flex', gap: 3, mb: 0.5 }}>
+                  <Box sx={{ flex: 1 }}>
                     <Typography variant="caption" color="text.secondary">
-                      预设音量: {volume1}%
+                      设备 A 音量: {volume1}%
                     </Typography>
                     <Slider
                       value={volume1}
@@ -329,24 +327,11 @@ export default function App() {
                       min={0}
                       max={100}
                       size="small"
-                      sx={{ mt: 0.5 }}
                     />
-                  </Grid>
-                  <Grid item xs={6}>
-                    <FormControl size="small" fullWidth sx={{ mb: 1 }}>
-                      <InputLabel>设备 B</InputLabel>
-                      <Select
-                        value={selectedDevice2}
-                        label="设备 B"
-                        onChange={e => setSelectedDevice2(e.target.value)}
-                      >
-                        {devices.map(d => (
-                          <MenuItem key={d.id} value={d.id}>{d.name}</MenuItem>
-                        ))}
-                      </Select>
-                    </FormControl>
+                  </Box>
+                  <Box sx={{ flex: 1 }}>
                     <Typography variant="caption" color="text.secondary">
-                      预设音量: {volume2}%
+                      设备 B 音量: {volume2}%
                     </Typography>
                     <Slider
                       value={volume2}
@@ -354,10 +339,9 @@ export default function App() {
                       min={0}
                       max={100}
                       size="small"
-                      sx={{ mt: 0.5 }}
                     />
-                  </Grid>
-                </Grid>
+                  </Box>
+                </Box>
                 <Box sx={{ display: 'flex', gap: 1, mt: 1.5 }}>
                   <Button
                     variant="contained"
@@ -367,6 +351,20 @@ export default function App() {
                   >
                     保存配置
                   </Button>
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        size="small"
+                        checked={notificationEnabled}
+                        onChange={e => {
+                          setNotificationEnabled(e.target.checked)
+                          window.services.saveSettings({ notificationEnabled: e.target.checked })
+                        }}
+                      />
+                    }
+                    label="切换通知"
+                    labelPlacement="end"
+                  />
                   <Button
                     variant="outlined"
                     size="small"
@@ -400,7 +398,7 @@ export default function App() {
           {!loading && requirements?.ready && (
             <Alert severity="info" sx={{ mb: 2 }} icon={<InfoIcon />}>
               <Typography variant="body2">
-                在 uTools 输入「快捷切换音频」可一键切换设备。建议为该指令绑定全局快捷键。
+                为「快速切换音频」绑定全局快捷键可一键切换设备（无弹窗）。
               </Typography>
             </Alert>
           )}
