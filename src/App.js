@@ -84,16 +84,9 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    window.utools.onPluginEnter(({ code }) => {
-      if (code === 'audio-quick-switch') {
-        window.services.switchAudioDevice().then(result => {
-          const msg = result.success
-            ? `已切换到: ${result.deviceName}`
-            : `切换失败: ${result.message}`
-          window.services.notify(msg, !result.success)
-          setTimeout(() => window.utools.outPlugin(), 500)
-        })
-      }
+    // 注册回调给 preload 层，用于设置页面重新进入时刷新设备列表
+    window.services.registerPluginEnterCallback(({ code }) => {
+      loadDevices()
     })
 
     window.utools.onPluginOut(() => {

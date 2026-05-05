@@ -354,3 +354,28 @@ window.services = {
     }
   }
 };
+
+/**
+ * 快捷切换优化：在 preload 层直接处理 onPluginEnter
+ * - audio-quick-switch: 跳过 React 加载，直接执行切换 + 通知 + 退出
+ * - 其他入口: 通过回调转发给 React 处理
+ */
+let _pluginEnterCallback = null;
+
+window.services.registerPluginEnterCallback = (cb) => {
+  _pluginEnterCallback = cb;
+};
+
+window.utools.onPluginEnter(({ code }) => {
+  if (code === 'audio-quick-switch') {
+    switchAudioDevice().then(result => {
+      const msg = result.success
+        ? `已切换到: ${result.deviceName}`
+        : `切换失败: ${result.message}`;
+      notify(msg, !result.success);
+      setTimeout(() => window.utools.outPlugin(), 500);
+    });
+  } else if (_pluginEnterCallback) {
+    _pluginEnterCallback({ code });
+  }
+});
