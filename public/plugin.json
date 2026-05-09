@@ -4,17 +4,17 @@
   "preload": "preload.js",
   "features": [
     {
-      "code": "audio-quick-switch",
-      "explain": "快捷切换音频输出设备",
+      "code": "audio-settings",
+      "explain": "音频输出设置",
       "cmds": [
-        "切换音频"
+        "音频输出设置"
       ]
     },
     {
-      "code": "audio-settings",
-      "explain": "音频设备偏好设置",
+      "code": "audio-quick-switch",
+      "explain": "快速切换音频",
       "cmds": [
-        "音频设置"
+        "快速切换音频"
       ]
     }
   ]

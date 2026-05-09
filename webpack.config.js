@@ -14,8 +14,18 @@ module.exports = [
       filename: '[name].js'
     },
     externals: {
-      electron: 'commonjs electron'
+      electron: 'commonjs electron',
+      koffi: 'commonjs koffi'
     },
+    plugins: [
+      new CopyWebpackPlugin({
+        patterns: [
+          { from: 'node_modules/koffi/index.js', to: 'node_modules/koffi/index.js' },
+          { from: 'node_modules/koffi/package.json', to: 'node_modules/koffi/package.json' },
+          { from: 'node_modules/koffi/build/koffi/win32_x64/koffi.node', to: 'node_modules/koffi/build/koffi/win32_x64/koffi.node' },
+        ]
+      })
+    ],
     module: {
       rules: [
         {
