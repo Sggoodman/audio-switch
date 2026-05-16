@@ -108,13 +108,16 @@ func (s *SettingsWindow) buildQuickSwitchSection() *fyne.Container {
 		if name == "" {
 			s.cfg.Device1 = nil
 		} else {
+			// 保留之前的音量设置
+			oldVol := 40
+			if s.cfg.Device1 != nil && s.cfg.Device1.Volume > 0 {
+				oldVol = s.cfg.Device1.Volume
+			}
 			s.cfg.Device1 = &config.DeviceConfig{
 				ID:   deviceMap[name],
 				Name: name,
 			}
-			if s.cfg.Device1.Volume == 0 {
-				s.cfg.Device1.Volume = 80
-			}
+			s.cfg.Device1.Volume = oldVol
 		}
 		s.saveConfig()
 	})
@@ -130,13 +133,16 @@ func (s *SettingsWindow) buildQuickSwitchSection() *fyne.Container {
 		if name == "" {
 			s.cfg.Device2 = nil
 		} else {
+			// 保留之前的音量设置
+			oldVol := 40
+			if s.cfg.Device2 != nil && s.cfg.Device2.Volume > 0 {
+				oldVol = s.cfg.Device2.Volume
+			}
 			s.cfg.Device2 = &config.DeviceConfig{
 				ID:   deviceMap[name],
 				Name: name,
 			}
-			if s.cfg.Device2.Volume == 0 {
-				s.cfg.Device2.Volume = 50
-			}
+			s.cfg.Device2.Volume = oldVol
 		}
 		s.saveConfig()
 	})
@@ -144,8 +150,8 @@ func (s *SettingsWindow) buildQuickSwitchSection() *fyne.Container {
 	dev2Select.SetSelected(dev2Name)
 
 	// 音量 A 滑块
-	vol1Label := widget.NewLabel("80%")
-	vol1 := 80
+	vol1Label := widget.NewLabel("40%")
+	vol1 := 40
 	if s.cfg.Device1 != nil && s.cfg.Device1.Volume > 0 {
 		vol1 = s.cfg.Device1.Volume
 	}
@@ -160,8 +166,8 @@ func (s *SettingsWindow) buildQuickSwitchSection() *fyne.Container {
 	}
 
 	// 音量 B 滑块
-	vol2Label := widget.NewLabel("50%")
-	vol2 := 50
+	vol2Label := widget.NewLabel("40%")
+	vol2 := 40
 	if s.cfg.Device2 != nil && s.cfg.Device2.Volume > 0 {
 		vol2 = s.cfg.Device2.Volume
 	}

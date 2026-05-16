@@ -208,10 +208,28 @@ func (t *TrayApp) switchWithVolume(deviceID string, vol int) error {
 
 // ShowSettings 打开设置窗口
 func (t *TrayApp) ShowSettings() {
-	if t.settings == nil {
-		t.settings = NewSettingsWindow(t.fyneApp, t.audioAPI, t.cfg, t)
+	// 每次打开设置窗口时重新加载配置，确保显示最新值
+	if err := t.ReloadConfig(); err != nil {
+		log.Printf("重新加载配置失败: %v", err)
 	}
+	// 每次都创建新的设置窗口，确保 UI 显示最新配置值
+	t.settings = NewSettingsWindow(t.fyneApp, t.audioAPI, t.cfg, t)
 	t.settings.Show()
+}
+
+// ReloadConfig 从文件重新加载配置到 t.cfg
+func (t *TrayApp) ReloadConfig() error {
+	newCfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	// 更新所有配置字段
+	t.cfg.Device1 = newCfg.Device1
+	t.cfg.Device2 = newCfg.Device2
+	t.cfg.Hotkey = newCfg.Hotkey
+	t.cfg.NotificationEnabled = newCfg.NotificationEnabled
+	t.cfg.AutoStart = newCfg.AutoStart
+	return nil
 }
 
 // InitHotkey 初始化热键（启动时调用）
