@@ -1,0 +1,4 @@
+*.exe
+*.syso
+build/
+.DS_Store
