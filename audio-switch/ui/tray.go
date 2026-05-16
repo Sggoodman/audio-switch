@@ -3,7 +3,9 @@ package ui
 import (
 	"audio-switch/internal/audio"
 	"audio-switch/internal/config"
+	"audio-switch/internal/hotkey"
 	"audio-switch/internal/notify"
+	"log"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/driver/desktop"
@@ -11,12 +13,14 @@ import (
 
 // TrayApp 管理系统托盘和相关功能
 type TrayApp struct {
-	fyneApp  fyne.App
-	audioAPI audio.Audio
-	notifier notify.Notifier
-	cfg      *config.Config
-	desk     desktop.App
-	settings *SettingsWindow
+	fyneApp   fyne.App
+	audioAPI  audio.Audio
+	notifier  notify.Notifier
+	cfg       *config.Config
+	desk      desktop.App
+	settings  *SettingsWindow
+	hotkeyMgr *hotkey.HotkeyMgr
+	callback  func()
 }
 
 // NewTrayApp 创建托盘应用
@@ -204,8 +208,83 @@ func (t *TrayApp) switchWithVolume(deviceID string, vol int) error {
 
 // ShowSettings 打开设置窗口
 func (t *TrayApp) ShowSettings() {
-	if t.settings == nil {
-		t.settings = NewSettingsWindow(t.fyneApp, t.audioAPI, t.cfg, t)
+	// 每次打开设置窗口时重新加载配置，确保显示最新值
+	if err := t.ReloadConfig(); err != nil {
+		log.Printf("重新加载配置失败: %v", err)
 	}
+	// 每次都创建新的设置窗口，确保 UI 显示最新配置值
+	t.settings = NewSettingsWindow(t.fyneApp, t.audioAPI, t.cfg, t)
 	t.settings.Show()
+}
+
+// ReloadConfig 从文件重新加载配置到 t.cfg
+func (t *TrayApp) ReloadConfig() error {
+	log.Printf("[Tray] 开始重新加载配置...")
+	newCfg, err := config.Load()
+	if err != nil {
+		log.Printf("[Tray] 加载配置失败: %v", err)
+		return err
+	}
+	log.Printf("[Tray] 加载的配置: Device1 vol=%d, Device2 vol=%d",
+		func() int {
+			if newCfg.Device1 != nil {
+				return newCfg.Device1.Volume
+			}
+			return 0
+		}(),
+		func() int {
+			if newCfg.Device2 != nil {
+				return newCfg.Device2.Volume
+			}
+			return 0
+		}())
+	// 更新所有配置字段
+	t.cfg.Device1 = newCfg.Device1
+	t.cfg.Device2 = newCfg.Device2
+	t.cfg.Hotkey = newCfg.Hotkey
+	t.cfg.NotificationEnabled = newCfg.NotificationEnabled
+	t.cfg.AutoStart = newCfg.AutoStart
+	log.Printf("[Tray] 配置已更新到 t.cfg")
+	return nil
+}
+
+// InitHotkey 初始化热键（启动时调用）
+func (t *TrayApp) InitHotkey() {
+	t.callback = t.QuickSwitch
+	if t.cfg.Hotkey == "" {
+		return
+	}
+	mgr, err := hotkey.Register(t.cfg.Hotkey, t.callback)
+	if err != nil {
+		log.Printf("注册热键 %s 失败: %v", t.cfg.Hotkey, err)
+		return
+	}
+	t.hotkeyMgr = mgr
+	log.Printf("热键 %s 已注册", t.cfg.Hotkey)
+}
+
+// UpdateHotkey 更新热键（设置界面调用）
+func (t *TrayApp) UpdateHotkey(hotkeyStr string) error {
+	// 先尝试注册新热键
+	mgr, err := hotkey.Register(hotkeyStr, t.callback)
+	if err != nil {
+		return err
+	}
+
+	// 注册成功，注销旧热键
+	if t.hotkeyMgr != nil {
+		t.hotkeyMgr.Unregister()
+	}
+
+	t.hotkeyMgr = mgr
+	t.cfg.Hotkey = hotkeyStr
+	log.Printf("热键已更新为 %s", hotkeyStr)
+	return nil
+}
+
+// Cleanup 清理资源（退出时调用）
+func (t *TrayApp) Cleanup() {
+	if t.hotkeyMgr != nil {
+		t.hotkeyMgr.Unregister()
+	}
 }
