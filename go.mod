@@ -5,6 +5,7 @@ go 1.25.5
 require (
 	fyne.io/fyne/v2 v2.7.3
 	github.com/go-ole/go-ole v1.3.0
+	github.com/go-toast/toast v0.0.0-20190211030409-01e6764cf0a4
 	github.com/moutend/go-wca v0.3.0
 	golang.design/x/hotkey v0.4.1
 	golang.org/x/sys v0.30.0
@@ -32,6 +33,7 @@ require (
 	github.com/kr/text v0.2.0 // indirect
 	github.com/nfnt/resize v0.0.0-20180221191011-83c6a9932646 // indirect
 	github.com/nicksnyder/go-i18n/v2 v2.5.1 // indirect
+	github.com/nu7hatch/gouuid v0.0.0-20131221200532-179d4d0c4d8d // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/rymdport/portal v0.4.2 // indirect
 	github.com/srwiley/oksvg v0.0.0-20221011165216-be6e8873101c // indirect

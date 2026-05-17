@@ -47,6 +47,11 @@ build() {
     if [ -f "assets/Icon.png" ]; then
         cp "assets/Icon.png" "${BUILD_DIR}/"
     fi
+    # 生成 .ico 文件（用于通知图标）
+    if [ -f "assets/Icon.png" ] && [ -f "scripts/convert-ico.go" ]; then
+        echo "生成 Icon.ico..."
+        go run scripts/convert-ico.go "${BUILD_DIR}/Icon.png" "${BUILD_DIR}/Icon.ico"
+    fi
 
     echo "完成: $output"
 }
@@ -57,13 +62,24 @@ build_debug() {
         ext=".exe"
     fi
 
-    local output="${BUILD_DIR}/${APP_NAME}-debug${ext}"
+    local output="${BUILD_DIR}/${APP_NAME}${ext}"
 
-    echo "构建调试版本（带终端 + 调试符号）..."
+    echo "构建调试版本（隐藏终端 + 调试符号）..."
 
-    go build \
+    CGO_ENABLED=1 go build \
+        -ldflags="-H windowsgui" \
         -o "$output" \
         .
+
+    # 复制图标文件
+    if [ -f "assets/Icon.png" ]; then
+        cp "assets/Icon.png" "${BUILD_DIR}/"
+    fi
+    # 生成 .ico 文件（用于通知图标）
+    if [ -f "assets/Icon.png" ] && [ -f "scripts/convert-ico.go" ]; then
+        echo "生成 Icon.ico..."
+        go run scripts/convert-ico.go "${BUILD_DIR}/Icon.png" "${BUILD_DIR}/Icon.ico"
+    fi
 
     echo "完成: $output"
 }

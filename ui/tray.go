@@ -219,16 +219,32 @@ func (t *TrayApp) ShowSettings() {
 
 // ReloadConfig 从文件重新加载配置到 t.cfg
 func (t *TrayApp) ReloadConfig() error {
+	log.Printf("[Tray] 开始重新加载配置...")
 	newCfg, err := config.Load()
 	if err != nil {
+		log.Printf("[Tray] 加载配置失败: %v", err)
 		return err
 	}
+	log.Printf("[Tray] 加载的配置: Device1 vol=%d, Device2 vol=%d",
+		func() int {
+			if newCfg.Device1 != nil {
+				return newCfg.Device1.Volume
+			}
+			return 0
+		}(),
+		func() int {
+			if newCfg.Device2 != nil {
+				return newCfg.Device2.Volume
+			}
+			return 0
+		}())
 	// 更新所有配置字段
 	t.cfg.Device1 = newCfg.Device1
 	t.cfg.Device2 = newCfg.Device2
 	t.cfg.Hotkey = newCfg.Hotkey
 	t.cfg.NotificationEnabled = newCfg.NotificationEnabled
 	t.cfg.AutoStart = newCfg.AutoStart
+	log.Printf("[Tray] 配置已更新到 t.cfg")
 	return nil
 }
 

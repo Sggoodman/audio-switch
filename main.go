@@ -16,12 +16,41 @@ import (
 	"fyne.io/fyne/v2/widget"
 )
 
+func init() {
+	// 初始化日志到文件
+	logPath := filepath.Join(os.TempDir(), "audio-switch", "app.log")
+	logDir := filepath.Dir(logPath)
+	if err := os.MkdirAll(logDir, 0755); err == nil {
+		f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err == nil {
+			log.SetOutput(f)
+			log.SetFlags(log.LstdFlags | log.Lshortfile)
+			log.Println("=== Audio Switch 启动 ===")
+		}
+	}
+}
+
 func main() {
+	log.Println("[Main] 开始加载配置...")
 	// 加载配置
 	cfg, err := config.Load()
 	if err != nil {
-		log.Printf("加载配置失败: %v，使用默认配置", err)
+		log.Printf("[Main] 加载配置失败: %v，使用默认配置", err)
 		cfg = config.DefaultConfig()
+	} else {
+		log.Printf("[Main] 配置加载成功: Device1 vol=%d, Device2 vol=%d",
+			func() int {
+				if cfg.Device1 != nil {
+					return cfg.Device1.Volume
+				}
+				return 0
+			}(),
+			func() int {
+				if cfg.Device2 != nil {
+					return cfg.Device2.Volume
+				}
+				return 0
+			}())
 	}
 
 	// 初始化平台音频接口

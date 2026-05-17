@@ -6,9 +6,12 @@ import (
 	"audio-switch/internal/config"
 	"audio-switch/internal/hotkey"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -25,6 +28,7 @@ type SettingsWindow struct {
 	tray        *TrayApp
 	devices     []audio.Device
 	autostartMgr autostart.Manager
+	uiReady     bool // UI 初始化完成标志
 }
 
 // NewSettingsWindow 创建设置窗口
@@ -36,6 +40,33 @@ func NewSettingsWindow(app fyne.App, a audio.Audio, cfg *config.Config, tray *Tr
 		tray:        tray,
 		autostartMgr: autostart.New(),
 	}
+
+	// 调试：打印传入的配置
+	log.Printf("[Settings] 创建窗口，Device1: name=%s vol=%d, Device2: name=%s vol=%d",
+		func() string {
+			if cfg.Device1 != nil {
+				return cfg.Device1.Name
+			}
+			return "<nil>"
+		}(),
+		func() int {
+			if cfg.Device1 != nil {
+				return cfg.Device1.Volume
+			}
+			return 0
+		}(),
+		func() string {
+			if cfg.Device2 != nil {
+				return cfg.Device2.Name
+			}
+			return "<nil>"
+		}(),
+		func() int {
+			if cfg.Device2 != nil {
+				return cfg.Device2.Volume
+			}
+			return 0
+		}())
 
 	s.win = app.NewWindow("音频输出设置")
 	s.win.SetContent(s.buildUI())
@@ -52,8 +83,15 @@ func NewSettingsWindow(app fyne.App, a audio.Audio, cfg *config.Config, tray *Tr
 // Show 显示设置窗口
 func (s *SettingsWindow) Show() {
 	s.RefreshDevices()
+	s.uiReady = false
 	s.win.Show()
 	s.win.RequestFocus()
+	// 延迟标记 UI 就绪，避免初始化时的 OnChanged 触发保存
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		s.uiReady = true
+		log.Printf("[Settings] UI 初始化完成，滑块回调已启用")
+	}()
 }
 
 // RefreshDevices 刷新设备列表
@@ -104,7 +142,13 @@ func (s *SettingsWindow) buildQuickSwitchSection() *fyne.Container {
 	if s.cfg.Device1 != nil {
 		dev1Name = s.cfg.Device1.Name
 	}
+	dev1Initialized := false
 	dev1Select := widget.NewSelect(deviceNames, func(name string) {
+		// 跳过初始化时的调用
+		if !dev1Initialized {
+			dev1Initialized = true
+			return
+		}
 		if name == "" {
 			s.cfg.Device1 = nil
 		} else {
@@ -118,8 +162,9 @@ func (s *SettingsWindow) buildQuickSwitchSection() *fyne.Container {
 				Name: name,
 			}
 			s.cfg.Device1.Volume = oldVol
+			log.Printf("[Settings] 设备 A 选择变更: %s, vol=%d", name, oldVol)
+			s.saveConfig()
 		}
-		s.saveConfig()
 	})
 	dev1Select.PlaceHolder = "选择设备 A"
 	dev1Select.SetSelected(dev1Name)
@@ -129,7 +174,13 @@ func (s *SettingsWindow) buildQuickSwitchSection() *fyne.Container {
 	if s.cfg.Device2 != nil {
 		dev2Name = s.cfg.Device2.Name
 	}
+	dev2Initialized := false
 	dev2Select := widget.NewSelect(deviceNames, func(name string) {
+		// 跳过初始化时的调用
+		if !dev2Initialized {
+			dev2Initialized = true
+			return
+		}
 		if name == "" {
 			s.cfg.Device2 = nil
 		} else {
@@ -143,8 +194,9 @@ func (s *SettingsWindow) buildQuickSwitchSection() *fyne.Container {
 				Name: name,
 			}
 			s.cfg.Device2.Volume = oldVol
+			log.Printf("[Settings] 设备 B 选择变更: %s, vol=%d", name, oldVol)
+			s.saveConfig()
 		}
-		s.saveConfig()
 	})
 	dev2Select.PlaceHolder = "选择设备 B"
 	dev2Select.SetSelected(dev2Name)
@@ -155,11 +207,15 @@ func (s *SettingsWindow) buildQuickSwitchSection() *fyne.Container {
 	if s.cfg.Device1 != nil && s.cfg.Device1.Volume > 0 {
 		vol1 = s.cfg.Device1.Volume
 	}
+	log.Printf("[Settings] 音量 A 滑块初始化: vol=%d", vol1)
+	// 立即更新标签显示
+	vol1Label.SetText(formatPercent(vol1))
 	vol1Slider := widget.NewSlider(0, 100)
 	vol1Slider.SetValue(float64(vol1))
 	vol1Slider.OnChanged = func(v float64) {
 		vol1Label.SetText(formatPercent(int(v)))
-		if s.cfg.Device1 != nil {
+		if s.cfg.Device1 != nil && s.uiReady {
+			log.Printf("[Settings] 音量 A 滑块 OnChanged: %v (uiReady=%v)", v, s.uiReady)
 			s.cfg.Device1.Volume = int(v)
 			s.saveConfig()
 		}
@@ -171,11 +227,14 @@ func (s *SettingsWindow) buildQuickSwitchSection() *fyne.Container {
 	if s.cfg.Device2 != nil && s.cfg.Device2.Volume > 0 {
 		vol2 = s.cfg.Device2.Volume
 	}
+	// 立即更新标签显示
+	vol2Label.SetText(formatPercent(vol2))
 	vol2Slider := widget.NewSlider(0, 100)
 	vol2Slider.SetValue(float64(vol2))
 	vol2Slider.OnChanged = func(v float64) {
 		vol2Label.SetText(formatPercent(int(v)))
-		if s.cfg.Device2 != nil {
+		if s.cfg.Device2 != nil && s.uiReady {
+			log.Printf("[Settings] 音量 B 滑块 OnChanged: %v (uiReady=%v)", v, s.uiReady)
 			s.cfg.Device2.Volume = int(v)
 			s.saveConfig()
 		}
@@ -405,9 +464,33 @@ func (s *SettingsWindow) buildActionButtons() *fyne.Container {
 
 // saveConfig 保存配置
 func (s *SettingsWindow) saveConfig() {
+	// 获取调用栈，找出是谁调用了 saveConfig
+	pc, _, _, _ := runtime.Caller(1)
+	fn := runtime.FuncForPC(pc)
+	caller := "unknown"
+	if fn != nil {
+		caller = fn.Name()
+	}
+
+	log.Printf("[Settings] 保存配置 (caller: %s): Device1 vol=%d, Device2 vol=%d",
+		caller,
+		func() int {
+			if s.cfg.Device1 != nil {
+				return s.cfg.Device1.Volume
+			}
+			return 0
+		}(),
+		func() int {
+			if s.cfg.Device2 != nil {
+				return s.cfg.Device2.Volume
+			}
+			return 0
+		}())
 	if err := config.Save(s.cfg); err != nil {
+		log.Printf("[Settings] 保存配置失败: %v", err)
 		dialog.ShowError(err, s.win)
 	}
+	log.Printf("[Settings] 配置已保存到: %s", config.GetConfigPath())
 }
 
 func formatPercent(v int) string {
