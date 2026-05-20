@@ -3,6 +3,7 @@
 package notify
 
 import (
+	"audio-switch/internal/logger"
 	"fmt"
 	"os/exec"
 )
@@ -20,6 +21,7 @@ func (n *DarwinNotifier) Send(title, message string) error {
 	script := fmt.Sprintf(`display notification "%s" with title "%s"`, escapeAppleScript(message), escapeAppleScript(title))
 	out, err := exec.Command("osascript", "-e", script).CombinedOutput()
 	if err != nil {
+		logger.Warn("Notify", "推送失败", "error", err, "output", string(out))
 		return fmt.Errorf("osascript notification failed: %w\n%s", err, string(out))
 	}
 	return nil

@@ -3,6 +3,7 @@
 package notify
 
 import (
+	"audio-switch/internal/logger"
 	"fmt"
 	"os/exec"
 )
@@ -19,6 +20,7 @@ func New() Notifier {
 func (n *LinuxNotifier) Send(title, message string) error {
 	out, err := exec.Command("notify-send", title, message).CombinedOutput()
 	if err != nil {
+		logger.Warn("Notify", "推送失败", "error", err, "output", string(out))
 		return fmt.Errorf("notify-send failed: %w\n%s", err, string(out))
 	}
 	return nil

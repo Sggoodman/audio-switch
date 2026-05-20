@@ -6,11 +6,8 @@ import (
 	"audio-switch/internal/config"
 	"audio-switch/internal/hotkey"
 	"audio-switch/internal/logger"
+	"audio-switch/internal/util"
 	"fmt"
-	"os"
-	"path/filepath"
-	"runtime"
-	"strings"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -21,44 +18,42 @@ import (
 
 // SettingsWindow 偏好设置窗口
 type SettingsWindow struct {
-	fyneApp     fyne.App
-	win         fyne.Window
-	audioAPI    audio.Audio
-	cfg         *config.Config
-	tray        *TrayApp
-	devices     []audio.Device
-	autostartMgr autostart.Manager
-	uiReady     bool // UI 初始化完成标志
+	fyneApp        fyne.App
+	win            fyne.Window
+	audioAPI       audio.Audio
+	cfg            *config.Config
+	tray           *TrayApp
+	devices        []audio.Device
+	autostartMgr   autostart.Manager
+	uiReady        bool
+	saveTimer      *time.Timer
+	cancelRecording func()
 }
 
 // NewSettingsWindow 创建设置窗口
 func NewSettingsWindow(app fyne.App, a audio.Audio, cfg *config.Config, tray *TrayApp) *SettingsWindow {
 	s := &SettingsWindow{
-		fyneApp:     app,
-		audioAPI:    a,
-		cfg:         cfg,
-		tray:        tray,
+		fyneApp:      app,
+		audioAPI:     a,
+		cfg:          cfg,
+		tray:         tray,
 		autostartMgr: autostart.New(),
 	}
 
-	// 调试：打印传入的配置
-	d1Name, d1Vol, d2Name, d2Vol := "<nil>", 0, "<nil>", 0
-	if cfg.Device1 != nil {
-		d1Name = cfg.Device1.Name
-		d1Vol = cfg.Device1.Volume
+	devices, err := a.GetDevices()
+	if err != nil {
+		logger.Warn("Settings", "获取设备列表失败", "error", err)
 	}
-	if cfg.Device2 != nil {
-		d2Name = cfg.Device2.Name
-		d2Vol = cfg.Device2.Volume
-	}
-	logger.Info("Settings", "创建窗口", "device1_name", d1Name, "device1_vol", d1Vol, "device2_name", d2Name, "device2_vol", d2Vol)
+	s.devices = devices
 
+	s.logConfig("创建窗口")
 	s.win = app.NewWindow("音频输出设置")
 	s.win.SetContent(s.buildUI())
 	s.win.Resize(fyne.NewSize(500, 450))
-
-	// 窗口关闭时隐藏而不是退出
 	s.win.SetCloseIntercept(func() {
+		if s.cancelRecording != nil {
+			s.cancelRecording()
+		}
 		s.win.Hide()
 	})
 
@@ -67,11 +62,9 @@ func NewSettingsWindow(app fyne.App, a audio.Audio, cfg *config.Config, tray *Tr
 
 // Show 显示设置窗口
 func (s *SettingsWindow) Show() {
-	s.RefreshDevices()
 	s.uiReady = false
 	s.win.Show()
 	s.win.RequestFocus()
-	// 延迟标记 UI 就绪，避免初始化时的 OnChanged 触发保存
 	go func() {
 		time.Sleep(500 * time.Millisecond)
 		s.uiReady = true
@@ -79,298 +72,69 @@ func (s *SettingsWindow) Show() {
 	}()
 }
 
-// RefreshDevices 刷新设备列表
-func (s *SettingsWindow) RefreshDevices() {
+// RefreshUI 重建窗口内容，用于配置变更后刷新
+func (s *SettingsWindow) RefreshUI() {
+	if s.cancelRecording != nil {
+		s.cancelRecording()
+	}
 	devices, err := s.audioAPI.GetDevices()
 	if err != nil {
-		dialog.ShowError(err, s.win)
-		return
+		logger.Warn("Settings", "刷新设备列表失败", "error", err)
 	}
 	s.devices = devices
+	s.win.SetContent(s.buildUI())
+	s.uiReady = false
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		s.uiReady = true
+	}()
+}
+
+// logConfig 打印当前配置到日志
+func (s *SettingsWindow) logConfig(action string) {
+	d1Name, d1Vol, d2Name, d2Vol := "<nil>", 0, "<nil>", 0
+	if s.cfg.Device1 != nil {
+		d1Name = s.cfg.Device1.Name
+		d1Vol = s.cfg.Device1.Volume
+	}
+	if s.cfg.Device2 != nil {
+		d2Name = s.cfg.Device2.Name
+		d2Vol = s.cfg.Device2.Volume
+	}
+	logger.Info("Settings", action, "device1_name", d1Name, "device1_vol", d1Vol, "device2_name", d2Name, "device2_vol", d2Vol)
 }
 
 // buildUI 构建设置界面
 func (s *SettingsWindow) buildUI() *fyne.Container {
-	// ---- 快捷切换设置 ----
-	quickSwitchCard := s.buildQuickSwitchSection()
-
-	// ---- 设备列表 ----
-	deviceListCard := s.buildDeviceListSection()
-
-	// ---- 操作按钮 ----
-	buttons := s.buildActionButtons()
-
 	return container.NewVBox(
-		quickSwitchCard,
+		s.buildQuickSwitchSection(),
 		widget.NewSeparator(),
-		deviceListCard,
+		s.buildDeviceListSection(),
 		widget.NewSeparator(),
-		buttons,
+		s.buildActionButtons(),
 	)
 }
 
 // buildQuickSwitchSection 构建快捷切换设置区域
 func (s *SettingsWindow) buildQuickSwitchSection() *fyne.Container {
-	// 获取设备名称列表
-	devices, _ := s.audioAPI.GetDevices()
-	s.devices = devices
-
 	deviceNames := []string{""}
-	deviceMap := map[string]string{} // name -> id
-	for _, d := range devices {
+	deviceMap := map[string]string{}
+	for _, d := range s.devices {
 		deviceNames = append(deviceNames, d.Name)
 		deviceMap[d.Name] = d.ID
 	}
 
-	// 设备 A 选择
-	dev1Name := ""
-	if s.cfg.Device1 != nil {
-		dev1Name = s.cfg.Device1.Name
-	}
-	dev1Initialized := false
-	dev1Select := widget.NewSelect(deviceNames, func(name string) {
-		// 跳过初始化时的调用
-		if !dev1Initialized {
-			dev1Initialized = true
-			return
-		}
-		if name == "" {
-			s.cfg.Device1 = nil
-		} else {
-			// 保留之前的音量设置
-			oldVol := 40
-			if s.cfg.Device1 != nil && s.cfg.Device1.Volume > 0 {
-				oldVol = s.cfg.Device1.Volume
-			}
-			s.cfg.Device1 = &config.DeviceConfig{
-				ID:   deviceMap[name],
-				Name: name,
-			}
-			s.cfg.Device1.Volume = oldVol
-			logger.Info("Settings", "设备 A 选择变更", "name", name, "vol", oldVol)
-			s.saveConfig()
-		}
-	})
-	dev1Select.PlaceHolder = "选择设备 A"
-	dev1Select.SetSelected(dev1Name)
+	dev1Select := s.buildDeviceSelect(deviceNames, deviceMap, "A", s.cfg.Device1)
+	dev2Select := s.buildDeviceSelect(deviceNames, deviceMap, "B", s.cfg.Device2)
 
-	// 设备 B 选择
-	dev2Name := ""
-	if s.cfg.Device2 != nil {
-		dev2Name = s.cfg.Device2.Name
-	}
-	dev2Initialized := false
-	dev2Select := widget.NewSelect(deviceNames, func(name string) {
-		// 跳过初始化时的调用
-		if !dev2Initialized {
-			dev2Initialized = true
-			return
-		}
-		if name == "" {
-			s.cfg.Device2 = nil
-		} else {
-			// 保留之前的音量设置
-			oldVol := 40
-			if s.cfg.Device2 != nil && s.cfg.Device2.Volume > 0 {
-				oldVol = s.cfg.Device2.Volume
-			}
-			s.cfg.Device2 = &config.DeviceConfig{
-				ID:   deviceMap[name],
-				Name: name,
-			}
-			s.cfg.Device2.Volume = oldVol
-			logger.Info("Settings", "设备 B 选择变更", "name", name, "vol", oldVol)
-			s.saveConfig()
-		}
-	})
-	dev2Select.PlaceHolder = "选择设备 B"
-	dev2Select.SetSelected(dev2Name)
+	vol1Slider, _ := s.buildVolumeSlider("A", s.cfg.Device1)
+	vol2Slider, _ := s.buildVolumeSlider("B", s.cfg.Device2)
 
-	// 音量 A 滑块
-	vol1Label := widget.NewLabel("40%")
-	vol1 := 40
-	if s.cfg.Device1 != nil && s.cfg.Device1.Volume > 0 {
-		vol1 = s.cfg.Device1.Volume
-	}
-	logger.Debug("Settings", "音量 A 滑块初始化", "vol", vol1)
-	// 立即更新标签显示
-	vol1Label.SetText(formatPercent(vol1))
-	vol1Slider := widget.NewSlider(0, 100)
-	vol1Slider.SetValue(float64(vol1))
-	vol1Slider.OnChanged = func(v float64) {
-		vol1Label.SetText(formatPercent(int(v)))
-		if s.cfg.Device1 != nil && s.uiReady {
-			logger.Debug("Settings", "音量 A 滑块 OnChanged", "value", v, "uiReady", s.uiReady)
-			s.cfg.Device1.Volume = int(v)
-			s.saveConfig()
-		}
-	}
-
-	// 音量 B 滑块
-	vol2Label := widget.NewLabel("40%")
-	vol2 := 40
-	if s.cfg.Device2 != nil && s.cfg.Device2.Volume > 0 {
-		vol2 = s.cfg.Device2.Volume
-	}
-	// 立即更新标签显示
-	vol2Label.SetText(formatPercent(vol2))
-	vol2Slider := widget.NewSlider(0, 100)
-	vol2Slider.SetValue(float64(vol2))
-	vol2Slider.OnChanged = func(v float64) {
-		vol2Label.SetText(formatPercent(int(v)))
-		if s.cfg.Device2 != nil && s.uiReady {
-			logger.Debug("Settings", "音量 B 滑块 OnChanged", "value", v, "uiReady", s.uiReady)
-			s.cfg.Device2.Volume = int(v)
-			s.saveConfig()
-		}
-	}
-
-	// 通知开关
 	notifyCheck := widget.NewCheck("切换时弹出通知", func(checked bool) {
 		s.cfg.NotificationEnabled = checked
 		s.saveConfig()
 	})
 	notifyCheck.SetChecked(s.cfg.NotificationEnabled)
-
-	// 开机自启
-	var autoStartUpdating bool
-	var autoStartCheck *widget.Check
-	autoStartCheck = widget.NewCheck("开机自动启动", func(checked bool) {
-		if autoStartUpdating {
-			return
-		}
-		if checked {
-			exePath, err := getExePath()
-			if err != nil {
-				dialog.ShowError(fmt.Errorf("获取程序路径失败: %w", err), s.win)
-				autoStartUpdating = true
-				autoStartCheck.SetChecked(false)
-				autoStartUpdating = false
-				return
-			}
-			if err := s.autostartMgr.Enable(exePath); err != nil {
-				dialog.ShowError(fmt.Errorf("启用开机自启失败: %w", err), s.win)
-				autoStartUpdating = true
-				autoStartCheck.SetChecked(false)
-				autoStartUpdating = false
-				return
-			}
-		} else {
-			if err := s.autostartMgr.Disable(); err != nil {
-				dialog.ShowError(fmt.Errorf("禁用开机自启失败: %w", err), s.win)
-				autoStartUpdating = true
-				autoStartCheck.SetChecked(true)
-				autoStartUpdating = false
-				return
-			}
-		}
-		s.cfg.AutoStart = checked
-		s.saveConfig()
-	})
-	autoStartCheck.SetChecked(s.cfg.AutoStart)
-
-	// ---- 热键设置 ----
-	// 解析当前热键
-	currentHotkey := s.cfg.Hotkey
-	modState := map[string]bool{"Ctrl": false, "Alt": false, "Shift": false}
-	currentKey := "S"
-	if currentHotkey != "" {
-		parts := strings.Split(currentHotkey, "+")
-		for i, p := range parts {
-			p = strings.TrimSpace(p)
-			if i < len(parts)-1 {
-				for _, m := range hotkey.SupportedModifiers() {
-					if strings.EqualFold(p, m) {
-						modState[m] = true
-					}
-				}
-			} else {
-				currentKey = p
-			}
-		}
-	}
-
-	// 修饰键 Check
-	var hotkeyUpdating bool
-	ctrlCheck := widget.NewCheck("Ctrl", nil)
-	ctrlCheck.SetChecked(modState["Ctrl"])
-	altCheck := widget.NewCheck("Alt", nil)
-	altCheck.SetChecked(modState["Alt"])
-	shiftCheck := widget.NewCheck("Shift", nil)
-	shiftCheck.SetChecked(modState["Shift"])
-
-	// 主键 Select
-	keyOptions := hotkey.SupportedKeys()
-	keySelect := widget.NewSelect(keyOptions, nil)
-	keySelect.PlaceHolder = "选择按键"
-	// 找到当前主键在列表中的匹配项（大小写不敏感）
-	for _, k := range keyOptions {
-		if strings.EqualFold(k, currentKey) {
-			keySelect.SetSelected(k)
-			break
-		}
-	}
-
-	// 热键变更回调
-	onHotkeyChange := func() {
-		if hotkeyUpdating {
-			return
-		}
-		// 至少需要一个修饰键
-		if !ctrlCheck.Checked && !altCheck.Checked && !shiftCheck.Checked {
-			dialog.ShowInformation("提示", "请至少选择一个修饰键（Ctrl/Alt/Shift）", s.win)
-			return
-		}
-		if keySelect.Selected == "" {
-			return
-		}
-
-		// 拼接热键字符串
-		var parts []string
-		if ctrlCheck.Checked {
-			parts = append(parts, "Ctrl")
-		}
-		if altCheck.Checked {
-			parts = append(parts, "Alt")
-		}
-		if shiftCheck.Checked {
-			parts = append(parts, "Shift")
-		}
-		parts = append(parts, keySelect.Selected)
-		newHotkey := strings.Join(parts, "+")
-
-		// 尝试注册新热键
-		if err := s.tray.UpdateHotkey(newHotkey); err != nil {
-			dialog.ShowError(fmt.Errorf("注册热键失败: %w\n\n快捷键 %s 可能已被其他程序占用", err, newHotkey), s.win)
-			// 恢复到之前的状态
-			hotkeyUpdating = true
-			ctrlCheck.SetChecked(modState["Ctrl"])
-			altCheck.SetChecked(modState["Alt"])
-			shiftCheck.SetChecked(modState["Shift"])
-			// 恢复主键选择
-			for _, k := range keyOptions {
-				if strings.EqualFold(k, currentKey) {
-					keySelect.SetSelected(k)
-					break
-				}
-			}
-			hotkeyUpdating = false
-			return
-		}
-
-		// 成功，更新状态
-		modState["Ctrl"] = ctrlCheck.Checked
-		modState["Alt"] = altCheck.Checked
-		modState["Shift"] = shiftCheck.Checked
-		currentKey = keySelect.Selected
-		currentHotkey = newHotkey
-		s.saveConfig()
-	}
-
-	ctrlCheck.OnChanged = func(bool) { onHotkeyChange() }
-	altCheck.OnChanged = func(bool) { onHotkeyChange() }
-	shiftCheck.OnChanged = func(bool) { onHotkeyChange() }
-	keySelect.OnChanged = func(string) { onHotkeyChange() }
 
 	return container.NewVBox(
 		widget.NewLabelWithStyle("快捷切换设置", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
@@ -379,24 +143,270 @@ func (s *SettingsWindow) buildQuickSwitchSection() *fyne.Container {
 			container.NewVBox(widget.NewLabel("设备 B:"), dev2Select),
 		),
 		container.NewGridWithColumns(2,
-			container.NewVBox(widget.NewLabel("A 音量:"), container.NewBorder(nil, nil, nil, vol1Label, vol1Slider)),
-			container.NewVBox(widget.NewLabel("B 音量:"), container.NewBorder(nil, nil, nil, vol2Label, vol2Slider)),
+			container.NewVBox(widget.NewLabel("A 音量:"), vol1Slider),
+			container.NewVBox(widget.NewLabel("B 音量:"), vol2Slider),
 		),
-		container.NewGridWithColumns(2, notifyCheck, autoStartCheck),
+		container.NewGridWithColumns(2, notifyCheck, s.buildAutoStartSection()),
 		widget.NewSeparator(),
 		widget.NewLabelWithStyle("快捷键", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		container.NewBorder(nil, nil, nil, keySelect,
-			container.NewHBox(ctrlCheck, altCheck, shiftCheck),
-		),
+		s.buildHotkeySection(),
 	)
+}
+
+// buildDeviceSelect 构建设备选择下拉框
+func (s *SettingsWindow) buildDeviceSelect(deviceNames []string, deviceMap map[string]string, label string, cfgDev *config.DeviceConfig) *widget.Select {
+	selectedName := ""
+	if cfgDev != nil {
+		selectedName = cfgDev.Name
+	}
+
+	initialized := false
+	sel := widget.NewSelect(deviceNames, func(name string) {
+		if !initialized {
+			return
+		}
+
+		cfgField := &s.cfg.Device1
+		if label == "B" {
+			cfgField = &s.cfg.Device2
+		}
+
+		if name == "" {
+			*cfgField = nil
+		} else {
+			oldVol := 40
+			if *cfgField != nil && (*cfgField).Volume > 0 {
+				oldVol = (*cfgField).Volume
+			}
+			*cfgField = &config.DeviceConfig{
+				ID:     deviceMap[name],
+				Name:   name,
+				Volume: oldVol,
+			}
+			logger.Info("Settings", "设备选择变更", "device", label, "name", name, "vol", oldVol)
+			s.saveConfig()
+		}
+	})
+	sel.PlaceHolder = "选择设备 " + label
+	sel.SetSelected(selectedName)
+	initialized = true
+	return sel
+}
+
+// buildVolumeSlider 构建音量滑块，返回容器和标签（用于外部更新）。
+func (s *SettingsWindow) buildVolumeSlider(label string, cfgDev *config.DeviceConfig) (*fyne.Container, *widget.Label) {
+	vol := 40
+	if cfgDev != nil && cfgDev.Volume > 0 {
+		vol = cfgDev.Volume
+	}
+	logger.Debug("Settings", "音量滑块初始化", "device", label, "vol", vol)
+
+	pctLabel := widget.NewLabel(formatPercent(vol))
+	slider := widget.NewSlider(0, 100)
+	slider.SetValue(float64(vol))
+	slider.OnChanged = func(v float64) {
+		pctLabel.SetText(formatPercent(int(v)))
+
+		cfgField := s.cfg.Device1
+		if label == "B" {
+			cfgField = s.cfg.Device2
+		}
+		if cfgField != nil && s.uiReady {
+			logger.Debug("Settings", "音量滑块变更", "device", label, "value", v)
+			cfgField.Volume = int(v)
+			s.debouncedSave()
+		}
+	}
+
+	return container.NewBorder(nil, nil, nil, pctLabel, slider), pctLabel
+}
+
+// buildAutoStartSection 构建开机自启区域
+func (s *SettingsWindow) buildAutoStartSection() *widget.Check {
+	var updating bool
+	var check *widget.Check
+	check = widget.NewCheck("开机自动启动", func(checked bool) {
+		if updating {
+			return
+		}
+		if checked {
+			exePath, err := util.GetExePath()
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("获取程序路径失败: %w", err), s.win)
+				updating = true
+				check.SetChecked(false)
+				updating = false
+				return
+			}
+			if err := s.autostartMgr.Enable(exePath); err != nil {
+				dialog.ShowError(fmt.Errorf("启用开机自启失败: %w", err), s.win)
+				updating = true
+				check.SetChecked(false)
+				updating = false
+				return
+			}
+		} else {
+			if err := s.autostartMgr.Disable(); err != nil {
+				dialog.ShowError(fmt.Errorf("禁用开机自启失败: %w", err), s.win)
+				updating = true
+				check.SetChecked(true)
+				updating = false
+				return
+			}
+		}
+		s.cfg.AutoStart = checked
+		s.saveConfig()
+	})
+	check.SetChecked(s.cfg.AutoStart)
+	return check
+}
+
+// buildHotkeySection 构建热键设置区域（按键录制模式）
+func (s *SettingsWindow) buildHotkeySection() *fyne.Container {
+	displayText := s.cfg.Hotkey
+	if displayText == "" {
+		displayText = "未设置"
+	}
+	hotkeyLabel := widget.NewLabel(displayText)
+
+	var recordBtn *widget.Button
+	recordBtn = widget.NewButton("录制快捷键", func() {
+		if s.cancelRecording != nil {
+			s.cancelRecording()
+			return
+		}
+		s.startHotkeyRecording(hotkeyLabel, recordBtn)
+	})
+
+	clearBtn := widget.NewButton("清除", func() {
+		if s.cancelRecording != nil {
+			s.cancelRecording()
+		}
+		if s.tray.hotkeyMgr != nil {
+			s.tray.hotkeyMgr.Unregister()
+			s.tray.hotkeyMgr = nil
+		}
+		s.cfg.Hotkey = ""
+		hotkeyLabel.SetText("未设置")
+		s.saveConfig()
+	})
+
+	return container.NewBorder(nil, nil, nil,
+		container.NewHBox(recordBtn, clearBtn),
+		hotkeyLabel,
+	)
+}
+
+// startHotkeyRecording 开始录制快捷键（Windows API 轮询方式）
+func (s *SettingsWindow) startHotkeyRecording(label *widget.Label, btn *widget.Button) {
+	logger.Info("Settings", "开始录制快捷键", "currentHotkey", s.cfg.Hotkey, "hotkeyMgr", s.tray.hotkeyMgr != nil)
+
+	// 先抑制回调，防止 Unregister 竞态触发 QuickSwitch
+	s.tray.suppress.Store(true)
+
+	if s.tray.hotkeyMgr != nil {
+		s.tray.hotkeyMgr.Unregister()
+		s.tray.hotkeyMgr = nil
+	}
+
+	btn.SetText("按下快捷键组合... (Esc取消)")
+	btn.Disable()
+	label.SetText("_")
+
+	quit := make(chan struct{})
+	resultCh := make(chan string, 1)
+
+	s.cancelRecording = func() {
+		select {
+		case <-quit:
+		default:
+			close(quit)
+		}
+	}
+
+	// 后台轮询按键
+	go func() {
+		hotkeyStr := hotkey.RecordHotkey(quit)
+		select {
+		case <-quit:
+		default:
+			resultCh <- hotkeyStr
+		}
+	}()
+
+	// 定时检查结果
+	var checkTimer *time.Timer
+	checkTimer = time.AfterFunc(80*time.Millisecond, func() {
+		select {
+		case hotkeyStr := <-resultCh:
+			if hotkeyStr == "" {
+				// 取消
+				btn.SetText("录制快捷键")
+				btn.Enable()
+				s.cancelRecording = nil
+				s.tray.suppress.Store(false)
+				s.restoreHotkey()
+				displayText := s.cfg.Hotkey
+				if displayText == "" {
+					displayText = "未设置"
+				}
+				label.SetText(displayText)
+				return
+			}
+
+			if err := s.tray.UpdateHotkey(hotkeyStr); err != nil {
+				logger.Warn("Settings", "注册热键失败", "hotkey", hotkeyStr, "error", err)
+				label.SetText("注册失败: " + err.Error())
+				s.restoreHotkey()
+				displayText := s.cfg.Hotkey
+				if displayText == "" {
+					displayText = "未设置"
+				}
+				label.SetText(displayText)
+			} else {
+				logger.Info("Settings", "热键已录制", "hotkey", hotkeyStr)
+				label.SetText(hotkeyStr)
+				s.saveConfig()
+			}
+			btn.SetText("录制快捷键")
+			btn.Enable()
+			s.cancelRecording = nil
+			s.tray.suppress.Store(false)
+		default:
+			select {
+			case <-quit:
+				btn.SetText("录制快捷键")
+				btn.Enable()
+				s.cancelRecording = nil
+				s.tray.suppress.Store(false)
+				s.restoreHotkey()
+				displayText := s.cfg.Hotkey
+				if displayText == "" {
+					displayText = "未设置"
+				}
+				label.SetText(displayText)
+			default:
+				checkTimer.Reset(80 * time.Millisecond)
+			}
+		}
+	})
+}
+
+// restoreHotkey 恢复配置中保存的热键
+func (s *SettingsWindow) restoreHotkey() {
+	if s.cfg.Hotkey != "" && s.tray.callback != nil && s.tray.hotkeyMgr == nil {
+		if mgr, err := hotkey.Register(s.cfg.Hotkey, s.tray.callback); err == nil {
+			s.tray.hotkeyMgr = mgr
+		} else {
+			logger.Warn("Settings", "恢复热键失败", "hotkey", s.cfg.Hotkey, "error", err)
+		}
+	}
 }
 
 // buildDeviceListSection 构建设备列表区域
 func (s *SettingsWindow) buildDeviceListSection() *fyne.Container {
-	devices, _ := s.audioAPI.GetDevices()
-
 	var items []*widget.AccordionItem
-	for _, dev := range devices {
+	for _, dev := range s.devices {
 		dev := dev
 		status := ""
 		if dev.IsDefault {
@@ -409,7 +419,7 @@ func (s *SettingsWindow) buildDeviceListSection() *fyne.Container {
 				dialog.ShowError(err, s.win)
 				return
 			}
-			s.RefreshDevices()
+			s.RefreshUI()
 			s.tray.RefreshMenu()
 		})
 		items = append(items, &widget.AccordionItem{
@@ -433,30 +443,19 @@ func (s *SettingsWindow) buildDeviceListSection() *fyne.Container {
 func (s *SettingsWindow) buildActionButtons() *fyne.Container {
 	switchBtn := widget.NewButton("快速切换", func() {
 		s.tray.QuickSwitch()
-		s.RefreshDevices()
+		s.RefreshUI()
 	})
 
 	refreshBtn := widget.NewButton("刷新", func() {
-		s.RefreshDevices()
+		s.RefreshUI()
 		s.tray.RefreshMenu()
-		// 重建 UI 比较复杂，直接关闭再打开
-		s.win.Hide()
-		s.tray.ShowSettings()
 	})
 
 	return container.NewGridWithColumns(2, switchBtn, refreshBtn)
 }
 
-// saveConfig 保存配置
+// saveConfig 立即保存配置
 func (s *SettingsWindow) saveConfig() {
-	// 获取调用栈，找出是谁调用了 saveConfig
-	pc, _, _, _ := runtime.Caller(1)
-	fn := runtime.FuncForPC(pc)
-	caller := "unknown"
-	if fn != nil {
-		caller = fn.Name()
-	}
-
 	d1Vol, d2Vol := 0, 0
 	if s.cfg.Device1 != nil {
 		d1Vol = s.cfg.Device1.Volume
@@ -464,22 +463,26 @@ func (s *SettingsWindow) saveConfig() {
 	if s.cfg.Device2 != nil {
 		d2Vol = s.cfg.Device2.Volume
 	}
-	logger.Info("Settings", "保存配置", "caller", caller, "device1_vol", d1Vol, "device2_vol", d2Vol)
+	logger.Info("Settings", "保存配置", "device1_vol", d1Vol, "device2_vol", d2Vol)
+
 	if err := config.Save(s.cfg); err != nil {
 		logger.Warn("Settings", "保存配置失败", "error", err)
 		dialog.ShowError(err, s.win)
+		return
 	}
 	logger.Info("Settings", "配置已保存", "path", config.GetConfigPath())
 }
 
-func formatPercent(v int) string {
-	return fmt.Sprintf("%d%%", v)
+// debouncedSave 防抖保存，300ms 内只触发一次写盘
+func (s *SettingsWindow) debouncedSave() {
+	if s.saveTimer != nil {
+		s.saveTimer.Stop()
+	}
+	s.saveTimer = time.AfterFunc(300*time.Millisecond, func() {
+		s.saveConfig()
+	})
 }
 
-func getExePath() (string, error) {
-	exe, err := os.Executable()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Abs(exe)
+func formatPercent(v int) string {
+	return fmt.Sprintf("%d%%", v)
 }

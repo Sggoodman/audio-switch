@@ -5,6 +5,7 @@ package audio
 import (
 	"errors"
 	"fmt"
+	"runtime"
 	"syscall"
 	"unsafe"
 
@@ -46,6 +47,9 @@ func coInit() bool {
 
 // GetDevices 枚举所有活跃的音频输出设备
 func (a *WindowsAudio) GetDevices() ([]Device, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	if coInit() {
 		defer ole.CoUninitialize()
 	}
@@ -96,10 +100,12 @@ func (a *WindowsAudio) GetDevices() ([]Device, error) {
 		}
 
 		name := getDeviceName(dev)
+		ff := getDeviceFormFactor(dev)
 		devices = append(devices, Device{
-			ID:        id,
-			Name:      name,
-			IsDefault: id == defaultID,
+			ID:         id,
+			Name:       name,
+			IsDefault:  id == defaultID,
+			FormFactor: ff,
 		})
 		dev.Release()
 	}
@@ -108,6 +114,9 @@ func (a *WindowsAudio) GetDevices() ([]Device, error) {
 
 // GetDefaultDevice 返回当前默认音频输出设备
 func (a *WindowsAudio) GetDefaultDevice() (*Device, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	if coInit() {
 		defer ole.CoUninitialize()
 	}
@@ -138,6 +147,9 @@ func (a *WindowsAudio) GetDefaultDevice() (*Device, error) {
 
 // SetDefaultDevice 通过 IPolicyConfig COM 接口切换默认音频设备
 func (a *WindowsAudio) SetDefaultDevice(id string) error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	if coInit() {
 		defer ole.CoUninitialize()
 	}
@@ -146,6 +158,9 @@ func (a *WindowsAudio) SetDefaultDevice(id string) error {
 
 // SetDeviceVolume 切换到指定设备并设置音量（纯 Go 实现）
 func (a *WindowsAudio) SetDeviceVolume(id string, volume int) error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	if coInit() {
 		defer ole.CoUninitialize()
 	}
@@ -184,8 +199,39 @@ func getDeviceName(dev *wca.IMMDevice) string {
 	return name
 }
 
+// getDeviceFormFactor 从设备属性存储中读取物理类型
+func getDeviceFormFactor(dev *wca.IMMDevice) FormFactor {
+	var ps *wca.IPropertyStore
+	if err := dev.OpenPropertyStore(wca.STGM_READ, &ps); err != nil {
+		return FormFactorUnknown
+	}
+	defer ps.Release()
+
+	var pv wca.PROPVARIANT
+	if err := ps.GetValue(&wca.PKEY_AudioEndpoint_FormFactor, &pv); err != nil {
+		return FormFactorUnknown
+	}
+
+	val := uint32(pv.Val)
+	switch val {
+	case 0:
+		return FormFactorUnknown
+	case 1:
+		return FormFactorSpeakers
+	case 2:
+		return FormFactorHeadphones
+	case 3:
+		return FormFactorHeadset
+	case 4:
+		return FormFactorHDMI
+	case 8:
+		return FormFactorDisplay
+	default:
+		return FormFactorUnknown
+	}
+}
+
 // setDefaultEndpoint 通过 IPolicyConfig 切换默认音频设备
-// 优先使用 Windows 10+ 的 IPolicyConfig，失败回退到 IPolicyConfigVista
 func setDefaultEndpoint(deviceID string) error {
 	idPtr, err := syscall.UTF16PtrFromString(deviceID)
 	if err != nil {
@@ -193,13 +239,15 @@ func setDefaultEndpoint(deviceID string) error {
 	}
 
 	// IPolicyConfig (Win10+): SetDefaultEndpoint 在 vtable 索引 13
-	if err := callSetDefaultEndpoint(iidIPolicyConfig, 13, idPtr); err == nil {
+	err1 := callSetDefaultEndpoint(iidIPolicyConfig, 13, idPtr)
+	if err1 == nil {
 		return nil
 	}
 
 	// IPolicyConfigVista: SetDefaultEndpoint 在 vtable 索引 6
-	if err := callSetDefaultEndpoint(iidIPolicyConfigVista, 6, idPtr); err != nil {
-		return fmt.Errorf("IPolicyConfig 和 IPolicyConfigVista 均失败: %w", err)
+	err2 := callSetDefaultEndpoint(iidIPolicyConfigVista, 6, idPtr)
+	if err2 != nil {
+		return fmt.Errorf("IPolicyConfig(%v) 和 IPolicyConfigVista(%v) 均失败", err1, err2)
 	}
 	return nil
 }

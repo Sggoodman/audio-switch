@@ -97,3 +97,29 @@ logger.Debug("Module", "调试信息", "detail", something)
 - `internal/logger/` - 日志系统（zap 封装）
 - `scripts/` - 构建脚本
 - `assets/` - 图标等资源文件
+
+## Release 流程
+
+### 发布新版本
+   
+1. 编译发布版本：
+   ```bash
+   bash scripts/build.sh windows
+
+2. 获取远端最新标签并递增版本号：
+git fetch --tags
+# 查看当前最新标签
+git tag --sort=-v:refname | head -5
+3. 创建新标签并推送：
+git tag vX.Y.Z
+git push origin vX.Y.Z
+4. 使用 gh CLI 创建 GitHub Release（Token 从环境变量 GITHUB_TOKEN 获取）：
+gh release create vX.Y.Z build/audio-switch.exe \
+  --title "vX.Y.Z" \
+  --notes "release notes here"
+
+注意事项
+  
+- GitHub Token 通过环境变量 GITHUB_TOKEN 自动获取，无需额外配置
+- 版本号格式遵循语义化版本：v主版本.次版本.修订号
+- 编译脚本会通过 git describe --tags 自动生成版本信息注入到二进制中

@@ -2,32 +2,46 @@ package logger
 
 import (
 	"os"
+	"path/filepath"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 var global *zap.SugaredLogger
 
-// Init 初始化全局 logger，日志写入 path 指定的文件。
-// debug 为 true 时同时输出到 stdout。
-func Init(path string, debug bool) {
-	encoderCfg := zap.NewProductionEncoderConfig()
-	encoderCfg.TimeKey = "ts"
-	encoderCfg.EncodeTime = zapcore.ISO8601TimeEncoder
-	encoderCfg.EncodeLevel = zapcore.CapitalLevelEncoder
-	encoder := zapcore.NewConsoleEncoder(encoderCfg)
+func init() {
+	// 默认初始化到 stdout，确保 global 不为 nil
+	core := zapcore.NewCore(
+		zapcore.NewConsoleEncoder(newEncoderConfig()),
+		zapcore.AddSync(os.Stdout),
+		zapcore.DebugLevel,
+	)
+	global = zap.New(core, zap.AddCaller(), zap.AddCallerSkip(1)).Sugar()
+}
 
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	if err != nil {
-		// 回退到 stdout
-		core := zapcore.NewCore(encoder, zapcore.AddSync(os.Stdout), zapcore.DebugLevel)
-		global = zap.New(core, zap.AddCaller(), zap.AddCallerSkip(1)).Sugar()
-		return
+func newEncoderConfig() zapcore.EncoderConfig {
+	cfg := zap.NewProductionEncoderConfig()
+	cfg.TimeKey = "ts"
+	cfg.EncodeTime = zapcore.ISO8601TimeEncoder
+	cfg.EncodeLevel = zapcore.CapitalLevelEncoder
+	return cfg
+}
+
+// Init 初始化全局 logger，日志写入 path 指定的文件。
+// debug 为 true 时同时输出到 stdout。文件输出自动轮转（单文件最大 5MB，保留 3 个备份）。
+func Init(path string, debug bool) {
+	encoder := zapcore.NewConsoleEncoder(newEncoderConfig())
+
+	writer := &lumberjack.Logger{
+		Filename: filepath.Join(filepath.Dir(path), filepath.Base(path)),
+		MaxSize:  5, // MB
+		MaxBackups: 3,
 	}
 
 	var cores []zapcore.Core
-	cores = append(cores, zapcore.NewCore(encoder, zapcore.AddSync(f), zapcore.DebugLevel))
+	cores = append(cores, zapcore.NewCore(encoder, zapcore.AddSync(writer), zapcore.DebugLevel))
 
 	if debug {
 		cores = append(cores, zapcore.NewCore(encoder, zapcore.AddSync(os.Stdout), zapcore.DebugLevel))

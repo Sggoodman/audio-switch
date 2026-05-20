@@ -6,10 +6,20 @@ import (
 	"audio-switch/internal/hotkey"
 	"audio-switch/internal/logger"
 	"audio-switch/internal/notify"
+	"fmt"
+	"net/url"
+	"strings"
+	"sync/atomic"
+	"time"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/driver/desktop"
+	"fyne.io/fyne/v2/widget"
 )
+
+// Version 由构建脚本通过 ldflags 注入
+var Version = "dev"
 
 // TrayApp 管理系统托盘和相关功能
 type TrayApp struct {
@@ -21,6 +31,8 @@ type TrayApp struct {
 	settings  *SettingsWindow
 	hotkeyMgr *hotkey.HotkeyMgr
 	callback  func()
+	quit      chan struct{}
+	suppress  atomic.Bool // 录制期间阻止热键回调
 }
 
 // NewTrayApp 创建托盘应用
@@ -30,6 +42,7 @@ func NewTrayApp(app fyne.App, a audio.Audio, n notify.Notifier, cfg *config.Conf
 		audioAPI: a,
 		notifier: n,
 		cfg:      cfg,
+		quit:     make(chan struct{}),
 	}
 	if desk, ok := app.(desktop.App); ok {
 		t.desk = desk
@@ -43,20 +56,24 @@ func (t *TrayApp) Setup() {
 		return
 	}
 	t.desk.SetSystemTrayMenu(t.buildMenu())
+
+	// 启动设备热插拔检测
+	go t.watchDevices()
 }
 
 // buildMenu 构建托盘菜单
 func (t *TrayApp) buildMenu() *fyne.Menu {
 	var items []*fyne.MenuItem
 
-	// 设备列表
 	devices, err := t.audioAPI.GetDevices()
-	if err == nil {
-		for _, dev := range devices {
-			dev := dev // capture loop var
-			label := dev.Name
+	if err != nil {
+		logger.Warn("Tray", "获取设备列表失败", "error", err)
+	} else {
+		for i := range devices {
+			dev := devices[i]
+			label := deviceIcon(dev.FormFactor) + " " + dev.Name
 			if dev.IsDefault {
-				label = "√ " + label + " (当前)"
+				label += " (当前)"
 			}
 			items = append(items, fyne.NewMenuItem(label, func() {
 				t.switchDevice(dev)
@@ -68,26 +85,28 @@ func (t *TrayApp) buildMenu() *fyne.Menu {
 		items = append(items, fyne.NewMenuItemSeparator())
 	}
 
-	// 快速切换
 	items = append(items, fyne.NewMenuItem("快速切换 (A/B)", func() {
 		t.QuickSwitch()
 	}))
 
-	// 刷新设备
 	items = append(items, fyne.NewMenuItem("刷新设备", func() {
 		t.RefreshMenu()
 	}))
 
 	items = append(items, fyne.NewMenuItemSeparator())
 
-	// 偏好设置
 	items = append(items, fyne.NewMenuItem("偏好设置...", func() {
 		t.ShowSettings()
 	}))
 
 	items = append(items, fyne.NewMenuItemSeparator())
 
-	// 退出
+	items = append(items, fyne.NewMenuItem("关于 Audio Switch", func() {
+		t.showAbout()
+	}))
+
+	items = append(items, fyne.NewMenuItemSeparator())
+
 	items = append(items, fyne.NewMenuItem("退出", func() {
 		t.fyneApp.Quit()
 	}))
@@ -104,12 +123,16 @@ func (t *TrayApp) RefreshMenu() {
 
 // QuickSwitch 在偏好设备之间快速切换
 func (t *TrayApp) QuickSwitch() {
+	if t.suppress.Load() {
+		return
+	}
 	devices, err := t.audioAPI.GetDevices()
 	if err != nil {
+		logger.Warn("Tray", "快速切换获取设备失败", "error", err)
+		_ = t.notifier.Send("切换失败", "无法获取音频设备列表")
 		return
 	}
 
-	// 找到当前默认设备
 	var currentID string
 	for _, d := range devices {
 		if d.IsDefault {
@@ -118,21 +141,24 @@ func (t *TrayApp) QuickSwitch() {
 		}
 	}
 
-	// 确定目标设备
-	var targetName string
-	var targetID string
-
+	var targetName, targetID string
 	if t.cfg.Device1 != nil && t.cfg.Device2 != nil {
-		// 两个偏好设备间切换
-		if currentID == t.cfg.Device1.ID {
-			targetID = t.cfg.Device2.ID
+		dev1Live := resolveDeviceID(devices, t.cfg.Device1)
+		dev2Live := resolveDeviceID(devices, t.cfg.Device2)
+		logger.Info("Tray", "快速切换调试",
+			"currentID", currentID,
+			"cfg1_id", t.cfg.Device1.ID, "cfg1_name", t.cfg.Device1.Name, "dev1Live", dev1Live,
+			"cfg2_id", t.cfg.Device2.ID, "cfg2_name", t.cfg.Device2.Name, "dev2Live", dev2Live,
+		)
+		if currentID == t.cfg.Device1.ID || currentID == dev1Live {
 			targetName = t.cfg.Device2.Name
+			targetID = dev2Live
 		} else {
-			targetID = t.cfg.Device1.ID
 			targetName = t.cfg.Device1.Name
+			targetID = dev1Live
 		}
+		logger.Info("Tray", "快速切换目标", "targetName", targetName, "targetID", targetID)
 	} else {
-		// 无偏好设备，循环切换
 		for i, d := range devices {
 			if d.IsDefault {
 				next := (i + 1) % len(devices)
@@ -144,45 +170,41 @@ func (t *TrayApp) QuickSwitch() {
 	}
 
 	if targetID == "" {
+		logger.Warn("Tray", "快速切换失败：找不到目标设备", "targetName", targetName)
+		_ = t.notifier.Send("切换失败", "找不到设备: "+targetName+"，请在设置中重新选择")
 		return
 	}
 
-	// 一次 exe 调用完成切换 + 音量设置
 	vol := t.getVolumePreset(targetID)
-	if err := t.switchWithVolume(targetID, vol); err != nil {
+	switchErr := t.switchWithVolume(targetID, vol)
+	t.notifyAndRefresh(targetName, switchErr)
+}
+
+// switchDevice 切换到指定设备
+func (t *TrayApp) switchDevice(dev audio.Device) {
+	vol := t.getVolumePreset(dev.ID)
+	switchErr := t.switchWithVolume(dev.ID, vol)
+	t.notifyAndRefresh(dev.Name, switchErr)
+}
+
+// notifyAndRefresh 统一处理通知发送和 UI 刷新
+func (t *TrayApp) notifyAndRefresh(targetName string, switchErr error) {
+	if switchErr != nil {
+		logger.Warn("Tray", "设备切换失败", "target", targetName, "error", switchErr)
 		if t.cfg.NotificationEnabled {
-			_ = t.notifier.Send("切换失败", err.Error())
+			_ = t.notifier.Send("切换失败", switchErr.Error())
 		}
 		return
 	}
 
+	logger.Info("Tray", "设备切换成功", "target", targetName)
 	if t.cfg.NotificationEnabled {
 		_ = t.notifier.Send("音频已切换", targetName)
 	}
 
 	t.RefreshMenu()
 	if t.settings != nil {
-		t.settings.RefreshDevices()
-	}
-}
-
-// switchDevice 切换到指定设备
-func (t *TrayApp) switchDevice(dev audio.Device) {
-	vol := t.getVolumePreset(dev.ID)
-	if err := t.switchWithVolume(dev.ID, vol); err != nil {
-		if t.cfg.NotificationEnabled {
-			_ = t.notifier.Send("切换失败", err.Error())
-		}
-		return
-	}
-
-	if t.cfg.NotificationEnabled {
-		_ = t.notifier.Send("音频已切换", dev.Name)
-	}
-
-	t.RefreshMenu()
-	if t.settings != nil {
-		t.settings.RefreshDevices()
+		t.settings.RefreshUI()
 	}
 }
 
@@ -197,8 +219,7 @@ func (t *TrayApp) getVolumePreset(deviceID string) int {
 	return -1
 }
 
-// switchWithVolume 一次调用完成切换+音量设置。
-// vol < 0 仅切换，0-100 切换并设音量。
+// switchWithVolume 一次调用完成切换+音量设置
 func (t *TrayApp) switchWithVolume(deviceID string, vol int) error {
 	if vol >= 0 {
 		return t.audioAPI.SetDeviceVolume(deviceID, vol)
@@ -206,12 +227,16 @@ func (t *TrayApp) switchWithVolume(deviceID string, vol int) error {
 	return t.audioAPI.SetDefaultDevice(deviceID)
 }
 
-// ShowSettings 打开设置窗口
+// ShowSettings 打开设置窗口（复用已有实例）
 func (t *TrayApp) ShowSettings() {
 	if err := t.ReloadConfig(); err != nil {
 		logger.Warn("Tray", "重新加载配置失败", "error", err)
 	}
-	// 每次都创建新的设置窗口，确保 UI 显示最新配置值
+	if t.settings != nil {
+		t.settings.RefreshUI()
+		t.settings.Show()
+		return
+	}
 	t.settings = NewSettingsWindow(t.fyneApp, t.audioAPI, t.cfg, t)
 	t.settings.Show()
 }
@@ -232,7 +257,6 @@ func (t *TrayApp) ReloadConfig() error {
 		d2Vol = newCfg.Device2.Volume
 	}
 	logger.Info("Tray", "加载的配置", "device1_vol", d1Vol, "device2_vol", d2Vol)
-	// 更新所有配置字段
 	t.cfg.Device1 = newCfg.Device1
 	t.cfg.Device2 = newCfg.Device2
 	t.cfg.Hotkey = newCfg.Hotkey
@@ -259,15 +283,24 @@ func (t *TrayApp) InitHotkey() {
 
 // UpdateHotkey 更新热键（设置界面调用）
 func (t *TrayApp) UpdateHotkey(hotkeyStr string) error {
-	// 先尝试注册新热键
-	mgr, err := hotkey.Register(hotkeyStr, t.callback)
-	if err != nil {
-		return err
+	oldHotkey := t.cfg.Hotkey
+	oldMgr := t.hotkeyMgr
+
+	// 先注销旧热键，避免注册新热键时立即捕获残留按键事件
+	if oldMgr != nil {
+		oldMgr.Unregister()
+		t.hotkeyMgr = nil
 	}
 
-	// 注册成功，注销旧热键
-	if t.hotkeyMgr != nil {
-		t.hotkeyMgr.Unregister()
+	mgr, err := hotkey.Register(hotkeyStr, t.callback)
+	if err != nil {
+		// 注册失败，尝试恢复旧热键
+		if oldHotkey != "" {
+			if reMgr, reErr := hotkey.Register(oldHotkey, t.callback); reErr == nil {
+				t.hotkeyMgr = reMgr
+			}
+		}
+		return err
 	}
 
 	t.hotkeyMgr = mgr
@@ -278,7 +311,110 @@ func (t *TrayApp) UpdateHotkey(hotkeyStr string) error {
 
 // Cleanup 清理资源（退出时调用）
 func (t *TrayApp) Cleanup() {
+	close(t.quit)
 	if t.hotkeyMgr != nil {
 		t.hotkeyMgr.Unregister()
+	}
+}
+
+// watchDevices 后台轮询检测设备热插拔
+func (t *TrayApp) watchDevices() {
+	var prevIDs string
+	for {
+		select {
+		case <-t.quit:
+			return
+		case <-time.After(3 * time.Second):
+		}
+
+		devices, err := t.audioAPI.GetDevices()
+		if err != nil {
+			continue
+		}
+
+		ids := make([]string, len(devices))
+		for i, d := range devices {
+			ids[i] = d.ID
+		}
+		curIDs := strings.Join(ids, ",")
+
+		if prevIDs != "" && prevIDs != curIDs {
+			logger.Info("Tray", "检测到设备列表变化")
+			t.RefreshMenu()
+			if t.settings != nil {
+				t.settings.RefreshUI()
+			}
+		}
+		prevIDs = curIDs
+	}
+}
+
+// aboutWin 复用的"关于"窗口
+var aboutWin fyne.Window
+
+// showAbout 显示"关于"对话框
+func (t *TrayApp) showAbout() {
+	ver := Version
+	// 简化版本号显示：v1.0.2-1-gd602dbd-dirty → v1.0.2+dev
+	if idx := strings.Index(ver, "-"); idx > 0 && ver[0] == 'v' {
+		ver = ver[:idx]
+	}
+
+	repoURL, _ := url.Parse("https://github.com/sggoodman/audio-switch")
+	link := widget.NewHyperlink("github.com/sggoodman/audio-switch", repoURL)
+
+	content := container.NewVBox(
+		widget.NewLabelWithStyle("Audio Switch", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
+		widget.NewLabel("跨平台音频输出设备快速切换工具"),
+		widget.NewSeparator(),
+		widget.NewLabel(fmt.Sprintf("版本: %s", ver)),
+		container.NewHBox(widget.NewLabel("项目主页:"), link),
+	)
+
+	if aboutWin == nil {
+		aboutWin = t.fyneApp.NewWindow("关于 Audio Switch")
+		aboutWin.SetContent(content)
+		aboutWin.SetFixedSize(true)
+		aboutWin.Resize(fyne.NewSize(350, 200))
+		aboutWin.SetCloseIntercept(func() {
+			aboutWin.Hide()
+		})
+	} else {
+		aboutWin.SetContent(content)
+	}
+	aboutWin.Show()
+	aboutWin.RequestFocus()
+}
+
+// resolveDeviceID 根据配置中的设备信息，在当前活跃设备列表中查找对应的设备 ID。
+// 先精确匹配 ID，找不到再按名称匹配（设备重连后 ID 可能变化）。
+func resolveDeviceID(devices []audio.Device, cfg *config.DeviceConfig) string {
+	if cfg == nil {
+		return ""
+	}
+	for _, d := range devices {
+		if d.ID == cfg.ID {
+			return d.ID
+		}
+	}
+	for _, d := range devices {
+		if d.Name == cfg.Name {
+			return d.ID
+		}
+	}
+	return ""
+}
+
+// deviceIcon 根据 FormFactor 返回设备类型图标前缀
+func deviceIcon(f audio.FormFactor) string {
+	switch f {
+	case audio.FormFactorSpeakers:
+		return "🔊"
+	case audio.FormFactorHeadphones, audio.FormFactorHeadset:
+		return "🎧"
+	case audio.FormFactorHDMI, audio.FormFactorDisplay:
+		return "🖥"
+	default:
+		return "🔉"
 	}
 }

@@ -5,7 +5,7 @@
 
 set -e
 
-VERSION=${VERSION:-"1.0.0"}
+VERSION=${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo "dev")}
 BUILD_DIR="build"
 APP_NAME="audio-switch"
 
@@ -39,7 +39,7 @@ build() {
     fi
 
     CGO_ENABLED=1 GOOS="$os" GOARCH="$arch" go build \
-        -ldflags="-s -w ${gui_flag} -X main.Version=$VERSION" \
+        -ldflags="-s -w ${gui_flag} -X ui.Version=$VERSION" \
         -o "$output" \
         .
 

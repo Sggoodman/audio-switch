@@ -10,6 +10,7 @@ require (
 	go.uber.org/zap v1.28.0
 	golang.design/x/hotkey v0.4.1
 	golang.org/x/sys v0.30.0
+	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 )
 
 require (

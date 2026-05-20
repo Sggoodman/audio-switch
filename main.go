@@ -9,6 +9,7 @@ import (
 	"audio-switch/internal/config"
 	"audio-switch/internal/logger"
 	"audio-switch/internal/notify"
+	"audio-switch/internal/util"
 	"audio-switch/ui"
 
 	"fyne.io/fyne/v2"
@@ -18,11 +19,9 @@ import (
 
 func init() {
 	logPath := filepath.Join(os.TempDir(), "audio-switch", "app.log")
-	logDir := filepath.Dir(logPath)
-	if err := os.MkdirAll(logDir, 0755); err == nil {
-		logger.Init(logPath, false)
-		logger.Info("Main", "=== Audio Switch 启动 ===")
-	}
+	_ = os.MkdirAll(filepath.Dir(logPath), 0755)
+	logger.Init(logPath, false)
+	logger.Info("Main", "=== Audio Switch 启动 ===")
 }
 
 func main() {
@@ -65,13 +64,15 @@ func main() {
 	tray := ui.NewTrayApp(a, audioAPI, notifier, cfg)
 	tray.Setup()
 
+	defer logger.Sync()
+
 	// 同步开机自启状态：确保配置与注册表/文件一致
 	{
 		autostartMgr := autostart.New()
 		enabled, err := autostartMgr.IsEnabled()
 		if err == nil {
 			if cfg.AutoStart && !enabled {
-				exePath, exeErr := getExePath()
+				exePath, exeErr := util.GetExePath()
 				if exeErr == nil {
 					if regErr := autostartMgr.Enable(exePath); regErr != nil {
 						logger.Warn("Autostart", "同步开机自启失败", "error", regErr)
@@ -118,13 +119,4 @@ func loadIcon() fyne.Resource {
 
 	logger.Warn("Main", "未找到图标文件，使用 Fyne 默认图标")
 	return nil
-}
-
-// getExePath 返回当前可执行文件的绝对路径
-func getExePath() (string, error) {
-	exe, err := os.Executable()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Abs(exe)
 }

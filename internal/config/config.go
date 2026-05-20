@@ -41,6 +41,9 @@ var (
 // GetConfigPath 返回配置文件路径
 func GetConfigPath() string {
 	configOnce.Do(func() {
+		if configPath != "" {
+			return
+		}
 		home, err := os.UserHomeDir()
 		if err != nil {
 			home = "."
@@ -98,9 +101,4 @@ func Save(cfg *Config) error {
 	}
 
 	return nil
-}
-
-// GetPreferredDevices 返回配置的两个偏好设备
-func GetPreferredDevices(cfg *Config) (*DeviceConfig, *DeviceConfig) {
-	return cfg.Device1, cfg.Device2
 }
