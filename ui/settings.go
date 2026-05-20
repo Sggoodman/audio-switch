@@ -5,8 +5,8 @@ import (
 	"audio-switch/internal/autostart"
 	"audio-switch/internal/config"
 	"audio-switch/internal/hotkey"
+	"audio-switch/internal/logger"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -42,31 +42,16 @@ func NewSettingsWindow(app fyne.App, a audio.Audio, cfg *config.Config, tray *Tr
 	}
 
 	// 调试：打印传入的配置
-	log.Printf("[Settings] 创建窗口，Device1: name=%s vol=%d, Device2: name=%s vol=%d",
-		func() string {
-			if cfg.Device1 != nil {
-				return cfg.Device1.Name
-			}
-			return "<nil>"
-		}(),
-		func() int {
-			if cfg.Device1 != nil {
-				return cfg.Device1.Volume
-			}
-			return 0
-		}(),
-		func() string {
-			if cfg.Device2 != nil {
-				return cfg.Device2.Name
-			}
-			return "<nil>"
-		}(),
-		func() int {
-			if cfg.Device2 != nil {
-				return cfg.Device2.Volume
-			}
-			return 0
-		}())
+	d1Name, d1Vol, d2Name, d2Vol := "<nil>", 0, "<nil>", 0
+	if cfg.Device1 != nil {
+		d1Name = cfg.Device1.Name
+		d1Vol = cfg.Device1.Volume
+	}
+	if cfg.Device2 != nil {
+		d2Name = cfg.Device2.Name
+		d2Vol = cfg.Device2.Volume
+	}
+	logger.Info("Settings", "创建窗口", "device1_name", d1Name, "device1_vol", d1Vol, "device2_name", d2Name, "device2_vol", d2Vol)
 
 	s.win = app.NewWindow("音频输出设置")
 	s.win.SetContent(s.buildUI())
@@ -90,7 +75,7 @@ func (s *SettingsWindow) Show() {
 	go func() {
 		time.Sleep(500 * time.Millisecond)
 		s.uiReady = true
-		log.Printf("[Settings] UI 初始化完成，滑块回调已启用")
+		logger.Debug("Settings", "UI 初始化完成，滑块回调已启用")
 	}()
 }
 
@@ -162,7 +147,7 @@ func (s *SettingsWindow) buildQuickSwitchSection() *fyne.Container {
 				Name: name,
 			}
 			s.cfg.Device1.Volume = oldVol
-			log.Printf("[Settings] 设备 A 选择变更: %s, vol=%d", name, oldVol)
+			logger.Info("Settings", "设备 A 选择变更", "name", name, "vol", oldVol)
 			s.saveConfig()
 		}
 	})
@@ -194,7 +179,7 @@ func (s *SettingsWindow) buildQuickSwitchSection() *fyne.Container {
 				Name: name,
 			}
 			s.cfg.Device2.Volume = oldVol
-			log.Printf("[Settings] 设备 B 选择变更: %s, vol=%d", name, oldVol)
+			logger.Info("Settings", "设备 B 选择变更", "name", name, "vol", oldVol)
 			s.saveConfig()
 		}
 	})
@@ -207,7 +192,7 @@ func (s *SettingsWindow) buildQuickSwitchSection() *fyne.Container {
 	if s.cfg.Device1 != nil && s.cfg.Device1.Volume > 0 {
 		vol1 = s.cfg.Device1.Volume
 	}
-	log.Printf("[Settings] 音量 A 滑块初始化: vol=%d", vol1)
+	logger.Debug("Settings", "音量 A 滑块初始化", "vol", vol1)
 	// 立即更新标签显示
 	vol1Label.SetText(formatPercent(vol1))
 	vol1Slider := widget.NewSlider(0, 100)
@@ -215,7 +200,7 @@ func (s *SettingsWindow) buildQuickSwitchSection() *fyne.Container {
 	vol1Slider.OnChanged = func(v float64) {
 		vol1Label.SetText(formatPercent(int(v)))
 		if s.cfg.Device1 != nil && s.uiReady {
-			log.Printf("[Settings] 音量 A 滑块 OnChanged: %v (uiReady=%v)", v, s.uiReady)
+			logger.Debug("Settings", "音量 A 滑块 OnChanged", "value", v, "uiReady", s.uiReady)
 			s.cfg.Device1.Volume = int(v)
 			s.saveConfig()
 		}
@@ -234,7 +219,7 @@ func (s *SettingsWindow) buildQuickSwitchSection() *fyne.Container {
 	vol2Slider.OnChanged = func(v float64) {
 		vol2Label.SetText(formatPercent(int(v)))
 		if s.cfg.Device2 != nil && s.uiReady {
-			log.Printf("[Settings] 音量 B 滑块 OnChanged: %v (uiReady=%v)", v, s.uiReady)
+			logger.Debug("Settings", "音量 B 滑块 OnChanged", "value", v, "uiReady", s.uiReady)
 			s.cfg.Device2.Volume = int(v)
 			s.saveConfig()
 		}
@@ -472,25 +457,19 @@ func (s *SettingsWindow) saveConfig() {
 		caller = fn.Name()
 	}
 
-	log.Printf("[Settings] 保存配置 (caller: %s): Device1 vol=%d, Device2 vol=%d",
-		caller,
-		func() int {
-			if s.cfg.Device1 != nil {
-				return s.cfg.Device1.Volume
-			}
-			return 0
-		}(),
-		func() int {
-			if s.cfg.Device2 != nil {
-				return s.cfg.Device2.Volume
-			}
-			return 0
-		}())
+	d1Vol, d2Vol := 0, 0
+	if s.cfg.Device1 != nil {
+		d1Vol = s.cfg.Device1.Volume
+	}
+	if s.cfg.Device2 != nil {
+		d2Vol = s.cfg.Device2.Volume
+	}
+	logger.Info("Settings", "保存配置", "caller", caller, "device1_vol", d1Vol, "device2_vol", d2Vol)
 	if err := config.Save(s.cfg); err != nil {
-		log.Printf("[Settings] 保存配置失败: %v", err)
+		logger.Warn("Settings", "保存配置失败", "error", err)
 		dialog.ShowError(err, s.win)
 	}
-	log.Printf("[Settings] 配置已保存到: %s", config.GetConfigPath())
+	logger.Info("Settings", "配置已保存", "path", config.GetConfigPath())
 }
 
 func formatPercent(v int) string {

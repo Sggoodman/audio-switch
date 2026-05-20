@@ -1,13 +1,13 @@
 package main
 
 import (
-	"log"
 	"os"
 	"path/filepath"
 
 	"audio-switch/internal/audio"
 	"audio-switch/internal/autostart"
 	"audio-switch/internal/config"
+	"audio-switch/internal/logger"
 	"audio-switch/internal/notify"
 	"audio-switch/ui"
 
@@ -17,40 +17,30 @@ import (
 )
 
 func init() {
-	// 初始化日志到文件
 	logPath := filepath.Join(os.TempDir(), "audio-switch", "app.log")
 	logDir := filepath.Dir(logPath)
 	if err := os.MkdirAll(logDir, 0755); err == nil {
-		f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-		if err == nil {
-			log.SetOutput(f)
-			log.SetFlags(log.LstdFlags | log.Lshortfile)
-			log.Println("=== Audio Switch 启动 ===")
-		}
+		logger.Init(logPath, false)
+		logger.Info("Main", "=== Audio Switch 启动 ===")
 	}
 }
 
 func main() {
-	log.Println("[Main] 开始加载配置...")
+	logger.Info("Main", "开始加载配置...")
 	// 加载配置
 	cfg, err := config.Load()
 	if err != nil {
-		log.Printf("[Main] 加载配置失败: %v，使用默认配置", err)
+		logger.Warn("Main", "加载配置失败，使用默认配置", "error", err)
 		cfg = config.DefaultConfig()
 	} else {
-		log.Printf("[Main] 配置加载成功: Device1 vol=%d, Device2 vol=%d",
-			func() int {
-				if cfg.Device1 != nil {
-					return cfg.Device1.Volume
-				}
-				return 0
-			}(),
-			func() int {
-				if cfg.Device2 != nil {
-					return cfg.Device2.Volume
-				}
-				return 0
-			}())
+		d1Vol, d2Vol := 0, 0
+		if cfg.Device1 != nil {
+			d1Vol = cfg.Device1.Volume
+		}
+		if cfg.Device2 != nil {
+			d2Vol = cfg.Device2.Volume
+		}
+		logger.Info("Main", "配置加载成功", "device1_vol", d1Vol, "device2_vol", d2Vol)
 	}
 
 	// 初始化平台音频接口
@@ -81,21 +71,19 @@ func main() {
 		enabled, err := autostartMgr.IsEnabled()
 		if err == nil {
 			if cfg.AutoStart && !enabled {
-				// 配置启用但注册表/文件不存在，补注册
 				exePath, exeErr := getExePath()
 				if exeErr == nil {
 					if regErr := autostartMgr.Enable(exePath); regErr != nil {
-						log.Printf("同步开机自启失败: %v", regErr)
+						logger.Warn("Autostart", "同步开机自启失败", "error", regErr)
 					} else {
-						log.Println("已补注册开机自启")
+						logger.Info("Autostart", "已补注册开机自启")
 					}
 				}
 			} else if !cfg.AutoStart && enabled {
-				// 配置禁用但注册表/文件残留，清理
 				if regErr := autostartMgr.Disable(); regErr != nil {
-					log.Printf("清理开机自启残留失败: %v", regErr)
+					logger.Warn("Autostart", "清理开机自启残留失败", "error", regErr)
 				} else {
-					log.Println("已清理开机自启残留")
+					logger.Info("Autostart", "已清理开机自启残留")
 				}
 			}
 		}
@@ -123,12 +111,12 @@ func loadIcon() fyne.Resource {
 	for _, p := range candidates {
 		data, err := os.ReadFile(p)
 		if err == nil && len(data) > 0 {
-			log.Printf("加载图标: %s (%d bytes)", p, len(data))
+			logger.Info("Main", "加载图标", "path", p, "size", len(data))
 			return fyne.NewStaticResource("Icon.png", data)
 		}
 	}
 
-	log.Println("未找到图标文件，使用 Fyne 默认图标")
+	logger.Warn("Main", "未找到图标文件，使用 Fyne 默认图标")
 	return nil
 }
 

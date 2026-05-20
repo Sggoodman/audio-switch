@@ -4,8 +4,8 @@ import (
 	"audio-switch/internal/audio"
 	"audio-switch/internal/config"
 	"audio-switch/internal/hotkey"
+	"audio-switch/internal/logger"
 	"audio-switch/internal/notify"
-	"log"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/driver/desktop"
@@ -208,9 +208,8 @@ func (t *TrayApp) switchWithVolume(deviceID string, vol int) error {
 
 // ShowSettings 打开设置窗口
 func (t *TrayApp) ShowSettings() {
-	// 每次打开设置窗口时重新加载配置，确保显示最新值
 	if err := t.ReloadConfig(); err != nil {
-		log.Printf("重新加载配置失败: %v", err)
+		logger.Warn("Tray", "重新加载配置失败", "error", err)
 	}
 	// 每次都创建新的设置窗口，确保 UI 显示最新配置值
 	t.settings = NewSettingsWindow(t.fyneApp, t.audioAPI, t.cfg, t)
@@ -219,32 +218,27 @@ func (t *TrayApp) ShowSettings() {
 
 // ReloadConfig 从文件重新加载配置到 t.cfg
 func (t *TrayApp) ReloadConfig() error {
-	log.Printf("[Tray] 开始重新加载配置...")
+	logger.Info("Tray", "开始重新加载配置...")
 	newCfg, err := config.Load()
 	if err != nil {
-		log.Printf("[Tray] 加载配置失败: %v", err)
+		logger.Warn("Tray", "加载配置失败", "error", err)
 		return err
 	}
-	log.Printf("[Tray] 加载的配置: Device1 vol=%d, Device2 vol=%d",
-		func() int {
-			if newCfg.Device1 != nil {
-				return newCfg.Device1.Volume
-			}
-			return 0
-		}(),
-		func() int {
-			if newCfg.Device2 != nil {
-				return newCfg.Device2.Volume
-			}
-			return 0
-		}())
+	d1Vol, d2Vol := 0, 0
+	if newCfg.Device1 != nil {
+		d1Vol = newCfg.Device1.Volume
+	}
+	if newCfg.Device2 != nil {
+		d2Vol = newCfg.Device2.Volume
+	}
+	logger.Info("Tray", "加载的配置", "device1_vol", d1Vol, "device2_vol", d2Vol)
 	// 更新所有配置字段
 	t.cfg.Device1 = newCfg.Device1
 	t.cfg.Device2 = newCfg.Device2
 	t.cfg.Hotkey = newCfg.Hotkey
 	t.cfg.NotificationEnabled = newCfg.NotificationEnabled
 	t.cfg.AutoStart = newCfg.AutoStart
-	log.Printf("[Tray] 配置已更新到 t.cfg")
+	logger.Info("Tray", "配置已更新到内存")
 	return nil
 }
 
@@ -256,11 +250,11 @@ func (t *TrayApp) InitHotkey() {
 	}
 	mgr, err := hotkey.Register(t.cfg.Hotkey, t.callback)
 	if err != nil {
-		log.Printf("注册热键 %s 失败: %v", t.cfg.Hotkey, err)
+		logger.Warn("Hotkey", "注册热键失败", "hotkey", t.cfg.Hotkey, "error", err)
 		return
 	}
 	t.hotkeyMgr = mgr
-	log.Printf("热键 %s 已注册", t.cfg.Hotkey)
+	logger.Info("Hotkey", "热键已注册", "hotkey", t.cfg.Hotkey)
 }
 
 // UpdateHotkey 更新热键（设置界面调用）
@@ -278,7 +272,7 @@ func (t *TrayApp) UpdateHotkey(hotkeyStr string) error {
 
 	t.hotkeyMgr = mgr
 	t.cfg.Hotkey = hotkeyStr
-	log.Printf("热键已更新为 %s", hotkeyStr)
+	logger.Info("Hotkey", "热键已更新", "hotkey", hotkeyStr)
 	return nil
 }
 

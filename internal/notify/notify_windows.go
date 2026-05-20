@@ -3,7 +3,7 @@
 package notify
 
 import (
-	"log"
+	"audio-switch/internal/logger"
 
 	"github.com/go-toast/toast"
 )
@@ -32,7 +32,7 @@ func (n *WindowsNotifier) Send(title, message string) error {
 		}
 
 		if err := notification.Push(); err != nil {
-			log.Printf("[Notify] 推送失败: %v", err)
+			logger.Warn("Notify", "推送失败", "error", err)
 		}
 	}()
 	return nil
