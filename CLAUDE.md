@@ -17,7 +17,24 @@ bash scripts/build.sh windows
 bash scripts/build.sh darwin    # macOS
 bash scripts/build.sh linux     # Linux
 bash scripts/build.sh all       # 所有平台
+
+# macOS 应用包（.app + 带拖拽安装布局的 .dmg，universal 双架构）
+bash scripts/build.sh app
+
+# Windows 安装包（NSIS，可选安装路径；需 makensis，CGO 交叉编译需 mingw）
+bash scripts/build.sh windows-app
 ```
+
+### 安装包说明
+
+- `build.sh app` 产出：
+  - `build/Audio Switch.app` — universal（amd64+arm64）应用包，`LSUIElement=true` + 运行时 Accessory 策略（纯托盘应用：无 Dock 图标、无终端窗口），ad-hoc 签名
+  - `build/Audio-Switch-<tag>-darwin-universal.dmg` — 带背景提示图与拖拽布局（app 左、Applications 右）的安装包
+  - 打包使用系统自带工具（lipo/sips/iconutil/hdiutil/codesign），无外部依赖
+- `build.sh windows-app` 产出 `build/Audio-Switch-<tag>-setup.exe`（NSIS MUI2 简体中文安装器：可选安装路径、开始菜单/桌面快捷方式、卸载程序；开机自启由应用内开关管理）
+  - macOS 上需 `brew install makensis`，且交叉编译需 mingw-w64；在 Windows 上打包则开箱即用
+- 安装包版本号取 git tag（`git describe --tags --exact-match`，HEAD 不在 tag 上时为 dev）；`all/darwin/windows` 等纯编译目标仍用完整 describe 版本注入二进制
+- 两种打包目标完成后都会清理中间二进制，`build/` 只保留安装包产物
 
 ### 输出目录
 
@@ -101,25 +118,37 @@ logger.Debug("Module", "调试信息", "detail", something)
 ## Release 流程
 
 ### 发布新版本
-   
-1. 编译发布版本：
-   ```bash
-   bash scripts/build.sh windows
 
-2. 获取远端最新标签并递增版本号：
-git fetch --tags
-# 查看当前最新标签
-git tag --sort=-v:refname | head -5
-3. 创建新标签并推送：
-git tag vX.Y.Z
-git push origin vX.Y.Z
-4. 使用 gh CLI 创建 GitHub Release（Token 从环境变量 GITHUB_TOKEN 获取）：
-gh release create vX.Y.Z build/audio-switch.exe \
-  --title "vX.Y.Z" \
-  --notes "release notes here"
+1. 提交所有改动后，获取远端最新标签并递增版本号：
+   ```bash
+   git fetch --tags
+   git tag --sort=-v:refname | head -5   # 查看当前最新标签
+   ```
+2. 创建新标签（安装包版本号取自 tag，**必须先打 tag 再打包**）：
+   ```bash
+   git tag vX.Y.Z
+   ```
+3. 打包各平台安装包：
+   ```bash
+   bash scripts/build.sh app          # macOS: Audio Switch.app + Audio-Switch-vX.Y.Z-darwin-universal.dmg
+   bash scripts/build.sh windows-app  # Windows: Audio-Switch-vX.Y.Z-setup.exe（需 makensis）
+   ```
+4. 推送代码与标签：
+   ```bash
+   git push origin main vX.Y.Z
+   ```
+5. 使用 gh CLI 创建 GitHub Release，上传安装包（而非裸二进制）：
+   ```bash
+   gh release create vX.Y.Z \
+     "build/Audio-Switch-vX.Y.Z-darwin-universal.dmg" \
+     "build/Audio-Switch-vX.Y.Z-setup.exe" \
+     --title "vX.Y.Z" \
+     --notes "release notes here"
+   ```
 
 注意事项
-  
+
 - GitHub Token 通过环境变量 GITHUB_TOKEN 自动获取，无需额外配置
 - 版本号格式遵循语义化版本：v主版本.次版本.修订号
+- HEAD 不在 tag 上时打包，安装包文件名会带 `dev` 后缀；正式发布务必先打 tag
 - 编译脚本会通过 git describe --tags 自动生成版本信息注入到二进制中

@@ -2,3 +2,4 @@
 *.syso
 build/
 .DS_Store
+.idea/

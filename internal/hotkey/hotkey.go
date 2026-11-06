@@ -28,6 +28,7 @@ func ParseHotkeyString(s string) ([]hotkey.Modifier, hotkey.Key, error) {
 
 	var mods []hotkey.Modifier
 	var key hotkey.Key
+	hasKey := false
 
 	for i, p := range parts {
 		p = strings.TrimSpace(p)
@@ -35,11 +36,11 @@ func ParseHotkeyString(s string) ([]hotkey.Modifier, hotkey.Key, error) {
 		case "ctrl", "control":
 			mods = append(mods, hotkey.ModCtrl)
 		case "alt":
-			mods = append(mods, hotkey.ModAlt)
+			mods = append(mods, modAlt)
 		case "shift":
 			mods = append(mods, hotkey.ModShift)
 		case "super", "win", "cmd", "command":
-			mods = append(mods, hotkey.ModWin)
+			mods = append(mods, modCmd)
 		default:
 			if i != len(parts)-1 {
 				return nil, 0, fmt.Errorf("unknown modifier: %s", p)
@@ -50,10 +51,12 @@ func ParseHotkeyString(s string) ([]hotkey.Modifier, hotkey.Key, error) {
 				return nil, 0, err
 			}
 			key = k
+			hasKey = true
 		}
 	}
 
-	if key == 0 {
+	// darwin 下 KeyA 的值为 0，不能以 key == 0 判断是否指定了主键
+	if !hasKey {
 		return nil, 0, fmt.Errorf("no key specified in hotkey: %s", s)
 	}
 
@@ -75,8 +78,7 @@ func Register(hotkeyStr string, callback func()) (*HotkeyMgr, error) {
 		quit:     make(chan struct{}),
 	}
 
-	err = hk.Register()
-	if err != nil {
+	if err := registerHotkey(hk); err != nil {
 		return nil, fmt.Errorf("register hotkey %s: %w", hotkeyStr, err)
 	}
 

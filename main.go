@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"time"
 
 	"audio-switch/internal/audio"
 	"audio-switch/internal/autostart"
@@ -25,6 +26,14 @@ func init() {
 }
 
 func main() {
+	// macOS：先设一次 accessory（无 Dock 图标）；GLFW 启动后还会再设回 regular，
+	// 因此延迟再覆盖一次
+	hideDockIcon()
+	go func() {
+		time.Sleep(1500 * time.Millisecond)
+		hideDockIcon()
+	}()
+
 	logger.Info("Main", "开始加载配置...")
 	// 加载配置
 	cfg, err := config.Load()
@@ -105,6 +114,8 @@ func loadIcon() fyne.Resource {
 		candidates = append(candidates,
 			filepath.Join(filepath.Dir(exePath), "assets", "Icon.png"),
 			filepath.Join(filepath.Dir(exePath), "Icon.png"),
+			// .app bundle 内的资源目录
+			filepath.Join(filepath.Dir(exePath), "..", "Resources", "Icon.png"),
 		)
 	}
 	candidates = append(candidates, "assets/Icon.png", "Icon.png")

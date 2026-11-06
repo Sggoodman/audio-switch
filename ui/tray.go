@@ -221,10 +221,17 @@ func (t *TrayApp) getVolumePreset(deviceID string) int {
 
 // switchWithVolume 一次调用完成切换+音量设置
 func (t *TrayApp) switchWithVolume(deviceID string, vol int) error {
-	if vol >= 0 {
-		return t.audioAPI.SetDeviceVolume(deviceID, vol)
+	// 切换设备必须显式执行：SetDeviceVolume 只负责音量（macOS/Linux 实现不含切换）
+	if err := t.audioAPI.SetDefaultDevice(deviceID); err != nil {
+		return err
 	}
-	return t.audioAPI.SetDefaultDevice(deviceID)
+	if vol >= 0 {
+		if err := t.audioAPI.SetDeviceVolume(deviceID, vol); err != nil {
+			// 音量设置失败不影响切换结果（HDMI 等设备音量由硬件控制，属正常情况）
+			logger.Warn("Tray", "音量设置失败", "device", deviceID, "error", err)
+		}
+	}
+	return nil
 }
 
 // ShowSettings 打开设置窗口（复用已有实例）
