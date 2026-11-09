@@ -1,5 +1,7 @@
 *.exe
 *.syso
 build/
+dist/
+.mygo/
 .DS_Store
 .idea/
