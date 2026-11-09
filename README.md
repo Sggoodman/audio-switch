@@ -6,61 +6,66 @@
 
 - **快捷切换** — 全局热键在设备 A/B 之间一键切换，无需打开设置
 - **音量预设** — 为每个设备设定目标音量，切换时自动应用
-- **系统通知** — 切换后弹出 Toast 通知，显示当前活跃设备
+- **系统通知** — 切换后弹出系统通知，显示当前活跃设备
 - **开机自启** — 可选开机自动启动，最小化到系统托盘
+- **轻量常驻** — 基于 [mygo](https://github.com/egoist/mygo) 原生 UI，无 webview；常驻物理内存实测约 19MB（同类 Fyne 实现约 94MB）
 - **跨平台** — 支持 Windows / macOS / Linux
 
 ## 支持平台
 
 | 平台 | 设备管理 | 通知 | 备注 |
 |------|---------|------|------|
-| Windows | Windows Core Audio (COM) | Win32 Toast | 无外部依赖 |
-| macOS | SwitchAudioSource CLI | osascript | 需 `brew install switchaudio-osx` |
-| Linux | pactl CLI | notify-send | PulseAudio / PipeWire 自带 |
+| Windows | Windows Core Audio (COM) | 系统通知 | 无外部依赖 |
+| macOS | CoreAudio（cgo 原生绑定） | 用户通知中心 | 无外部依赖 |
+| Linux | pactl CLI | 桌面通知服务 | PulseAudio / PipeWire 自带；托盘需 `libayatana-appindicator3` |
 
 ## 安装
 
-### 预编译版本
+前往 [Releases](https://github.com/Sggoodman/audio-switch/releases) 下载对应平台安装包：
 
-前往 [Releases](https://github.com/Sggoodman/audio-switch/releases) 下载对应平台的可执行文件。
-
-### 从源码构建
-
-需要 Go 1.21+ 和 CGO 工具链（Fyne 依赖）。
-
-```bash
-# 克隆仓库
-git clone https://github.com/Sggoodman/audio-switch.git
-cd audio-switch
-
-# 构建（Windows 示例）
-go build -o audio-switch.exe .
-
-# 或使用构建脚本（含图标资源）
-./scripts/build.sh windows
-```
-
-交叉编译：
-
-```bash
-GOOS=darwin GOARCH=amd64 go build .
-GOOS=linux GOARCH=amd64 go build .
-```
+| 平台 | 文件 |
+|------|------|
+| macOS（Apple Silicon / Intel 通用） | `audio-switch-<版本>.dmg` |
+| Windows | `audio-switch-setup-<版本>-amd64.exe` |
+| Linux (Debian 系) | `audio-switch_<版本>_amd64.deb` |
+| Linux（其他发行版） | `audio-switch-<版本>-linux-amd64.tar.gz`（含 install.sh） |
 
 ## 使用
 
-1. 启动后应用最小化到系统托盘
-2. 右键托盘图标 → **Settings** 打开偏好设置
-3. 选择设备 A 和设备 B，调整音量预设
-4. 点击托盘图标或按热键即可切换
+1. 启动后应用常驻系统托盘（无 Dock 图标 / 任务栏窗口）
+2. 点击托盘图标：菜单中列出所有输出设备，点击即切换
+3. **偏好设置** 中选择设备 A / B 与音量预设，可录制自定义全局热键
+4. 任何时候按热键（默认 `Ctrl+Alt+S`）在 A/B 设备间一键切换
+
+## 从源码构建
+
+需要 Go 1.27+（mygo 要求）；打包 macOS 版另需 Xcode 命令行工具（cgo 编译 CoreAudio 绑定），打包 Windows 安装器另需 NSIS（`brew install makensis`）。
+
+```bash
+git clone https://github.com/Sggoodman/audio-switch.git
+cd audio-switch
+
+# 开发调试（直出二进制）
+./scripts/build.sh debug
+
+# 打安装包
+./scripts/build.sh app          # macOS: .app + .dmg (universal)
+./scripts/build.sh windows-app  # Windows: setup.exe（纯 Go 交叉编译，无需 mingw）
+./scripts/build.sh linux        # Linux: .deb + tar.gz
+./scripts/build.sh all          # 全平台
+
+# 开发热重载（改代码自动重编译重启）
+go tool mygo dev
+```
 
 ## 技术栈
 
 - [Go](https://go.dev/) — 主语言
-- [Fyne](https://fyne.io/) — 跨平台 GUI 框架（系统托盘 + 设置窗口）
+- [mygo](https://github.com/egoist/mygo) — 桌面框架：托盘 / 全局热键 / 通知 / 开机自启 / native UI 设置窗口
 - [go-wca](https://github.com/moutend/go-wca) — Windows Core Audio API 绑定
-- [go-ole](https://github.com/go-ole/go-ole) — COM 接口支持
-- [hotkey](https://golang.design/x/hotkey) — 全局热键注册
+- [zap](https://github.com/uber-go/zap) — 结构化日志
+
+音频设备控制在 macOS 上通过 cgo 直接调用 CoreAudio，Windows 上基于 COM，Linux 上通过 pactl（兼容 PulseAudio / PipeWire）。
 
 ## 许可证
 
