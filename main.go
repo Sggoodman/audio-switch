@@ -14,7 +14,7 @@ import (
 	"github.com/egoist/mygo"
 )
 
-//go:embed assets/tray-template.png
+//go:embed assets/tray.png
 var assetsFS embed.FS
 
 func init() {
@@ -55,7 +55,7 @@ func main() {
 
 	audioAPI := audio.New()
 
-	trayIcon, err := assetsFS.ReadFile("assets/tray-template.png")
+	trayIcon, err := assetsFS.ReadFile("assets/tray.png")
 	if err != nil {
 		logger.Warn("Main", "加载托盘图标失败", "error", err)
 	}

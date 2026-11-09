@@ -43,10 +43,9 @@ func NewTrayApp(a audio.Audio, cfg *config.Config, trayIcon []byte) *TrayApp {
 // Setup 初始化系统托盘与热键（App ready 后在主线程调用）
 func (t *TrayApp) Setup() {
 	tray, err := mygo.NewTray(mygo.TrayOptions{
-		Icon:           t.trayIcon,
-		IconIsTemplate: true,
-		ToolTip:        "Audio Switch",
-		Menu:           t.buildMenu(),
+		Icon:    t.trayIcon,
+		ToolTip: "Audio Switch",
+		Menu:    t.buildMenu(),
 	})
 	if err != nil {
 		logger.Error("Tray", "创建托盘失败", "error", err)
