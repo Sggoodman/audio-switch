@@ -11,6 +11,13 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
+// quitting 标记应用退出流程中（OnBeforeQuit 与 OnClose 均在主线程执行）。
+// 设置窗口的"关闭即隐藏"在退出时放行，否则 Quit 会被 PreventDefault 拦截
+var quitting bool
+
+// MarkQuitting 标记应用进入退出流程（main 在 OnBeforeQuit 中调用）
+func MarkQuitting() { quitting = true }
+
 // SettingsWindow 偏好设置窗口（mygo native UI）
 type SettingsWindow struct {
 	tray     *TrayApp
@@ -53,13 +60,16 @@ func NewSettingsWindow(a audio.Audio, cfg *config.Config, tray *TrayApp) *Settin
 		Height:  560,
 		Content: ui.View(s.view),
 	})
-	// 关闭窗口 = 隐藏，保留实例下次复用
+	// 关闭窗口 = 隐藏，保留实例下次复用。
+	// 应用退出时（Quit 先关窗口）不拦截，否则退出无效果
 	s.win.OnClose(func(e *mygo.CloseEvent) {
 		if s.recording {
 			s.cancelRecording()
 		}
-		e.PreventDefault()
-		s.win.Hide()
+		if !quitting {
+			e.PreventDefault()
+			s.win.Hide()
+		}
 	})
 	return s
 }

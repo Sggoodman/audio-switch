@@ -34,6 +34,9 @@ func main() {
 	// 纯托盘应用：无 Dock 图标、无主窗口（替代原 hideDockIcon hack）
 	mygo.App.SetActivationPolicy(mygo.ActivationPolicyAccessory)
 
+	// 标记退出流程：设置窗口的"关闭即隐藏"须放行退出（OnBeforeQuit 与 OnClose 同在主线程）
+	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) { ui.MarkQuitting() })
+
 	// 最后一个窗口关闭时保持运行（托盘常驻）
 	mygo.App.OnWindowAllClosed(func() {})
 
