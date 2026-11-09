@@ -1,22 +1,21 @@
 package main
 
 import (
+	"embed"
+	"log"
 	"os"
 	"path/filepath"
-	"time"
 
 	"audio-switch/internal/audio"
-	"audio-switch/internal/autostart"
 	"audio-switch/internal/config"
 	"audio-switch/internal/logger"
-	"audio-switch/internal/notify"
-	"audio-switch/internal/util"
 	"audio-switch/ui"
 
-	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/app"
-	"fyne.io/fyne/v2/widget"
+	"github.com/egoist/mygo"
 )
+
+//go:embed assets/tray-template.png
+var assetsFS embed.FS
 
 func init() {
 	logPath := filepath.Join(os.TempDir(), "audio-switch", "app.log")
@@ -26,16 +25,19 @@ func init() {
 }
 
 func main() {
-	// macOS：先设一次 accessory（无 Dock 图标）；GLFW 启动后还会再设回 regular，
-	// 因此延迟再覆盖一次
-	hideDockIcon()
-	go func() {
-		time.Sleep(1500 * time.Millisecond)
-		hideDockIcon()
-	}()
+	// 单实例：重复启动时唤起已运行实例后退出
+	if !mygo.App.RequestSingleInstanceLock() {
+		logger.Info("Main", "已有实例运行，退出")
+		return
+	}
+
+	// 纯托盘应用：无 Dock 图标、无主窗口（替代原 hideDockIcon hack）
+	mygo.App.SetActivationPolicy(mygo.ActivationPolicyAccessory)
+
+	// 最后一个窗口关闭时保持运行（托盘常驻）
+	mygo.App.OnWindowAllClosed(func() {})
 
 	logger.Info("Main", "开始加载配置...")
-	// 加载配置
 	cfg, err := config.Load()
 	if err != nil {
 		logger.Warn("Main", "加载配置失败，使用默认配置", "error", err)
@@ -51,83 +53,44 @@ func main() {
 		logger.Info("Main", "配置加载成功", "device1_vol", d1Vol, "device2_vol", d2Vol)
 	}
 
-	// 初始化平台音频接口
 	audioAPI := audio.New()
 
-	// 初始化通知
-	notifier := notify.New()
+	trayIcon, err := assetsFS.ReadFile("assets/tray-template.png")
+	if err != nil {
+		logger.Warn("Main", "加载托盘图标失败", "error", err)
+	}
 
-	// 创建 Fyne 应用
-	a := app.NewWithID("com.audioswitch.app")
-	a.SetIcon(loadIcon())
-
-	// 主窗口（隐藏，仅用于托盘应用的生命周期管理）
-	w := a.NewWindow("Audio Switch")
-	w.SetContent(widget.NewLabel("")) // 占位内容
-	w.Resize(fyne.NewSize(1, 1))
-	w.SetCloseIntercept(func() {
-		w.Hide()
-	})
-
-	// 创建托盘应用
-	tray := ui.NewTrayApp(a, audioAPI, notifier, cfg)
-	tray.Setup()
+	tray := ui.NewTrayApp(audioAPI, cfg, trayIcon)
 
 	defer logger.Sync()
-
-	// 同步开机自启状态：确保配置与注册表/文件一致
-	{
-		autostartMgr := autostart.New()
-		enabled, err := autostartMgr.IsEnabled()
-		if err == nil {
-			if cfg.AutoStart && !enabled {
-				exePath, exeErr := util.GetExePath()
-				if exeErr == nil {
-					if regErr := autostartMgr.Enable(exePath); regErr != nil {
-						logger.Warn("Autostart", "同步开机自启失败", "error", regErr)
-					} else {
-						logger.Info("Autostart", "已补注册开机自启")
-					}
-				}
-			} else if !cfg.AutoStart && enabled {
-				if regErr := autostartMgr.Disable(); regErr != nil {
-					logger.Warn("Autostart", "清理开机自启残留失败", "error", regErr)
-				} else {
-					logger.Info("Autostart", "已清理开机自启残留")
-				}
-			}
-		}
-	}
-
-	// 注册全局热键
-	tray.InitHotkey()
 	defer tray.Cleanup()
 
-	a.Run()
+	// 同步开机自启状态：确保配置与系统注册一致
+	syncAutoStart(cfg)
+
+	mygo.App.WhenReady(func() {
+		tray.Setup()
+	})
+
+	if err := mygo.App.Run(); err != nil {
+		log.Fatal(err)
+	}
 }
 
-// loadIcon 从可执行文件同目录或 assets 目录加载图标
-func loadIcon() fyne.Resource {
-	// 候选图标路径（优先级从高到低）
-	candidates := []string{}
-	if exePath, err := os.Executable(); err == nil {
-		candidates = append(candidates,
-			filepath.Join(filepath.Dir(exePath), "assets", "Icon.png"),
-			filepath.Join(filepath.Dir(exePath), "Icon.png"),
-			// .app bundle 内的资源目录
-			filepath.Join(filepath.Dir(exePath), "..", "Resources", "Icon.png"),
-		)
-	}
-	candidates = append(candidates, "assets/Icon.png", "Icon.png")
-
-	for _, p := range candidates {
-		data, err := os.ReadFile(p)
-		if err == nil && len(data) > 0 {
-			logger.Info("Main", "加载图标", "path", p, "size", len(data))
-			return fyne.NewStaticResource("Icon.png", data)
+// syncAutoStart 同步配置与系统开机自启注册状态
+func syncAutoStart(cfg *config.Config) {
+	enabled := mygo.App.OpenAtLogin()
+	if cfg.AutoStart && !enabled {
+		if err := mygo.App.SetOpenAtLogin(true); err != nil {
+			logger.Warn("Autostart", "同步开机自启失败", "error", err)
+		} else {
+			logger.Info("Autostart", "已补注册开机自启")
+		}
+	} else if !cfg.AutoStart && enabled {
+		if err := mygo.App.SetOpenAtLogin(false); err != nil {
+			logger.Warn("Autostart", "清理开机自启残留失败", "error", err)
+		} else {
+			logger.Info("Autostart", "已清理开机自启残留")
 		}
 	}
-
-	logger.Warn("Main", "未找到图标文件，使用 Fyne 默认图标")
-	return nil
 }
