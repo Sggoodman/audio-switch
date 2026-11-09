@@ -2,7 +2,7 @@
   "name": "Audio Switch",
   "slug": "audio-switch",
   "identifier": "com.audioswitch.app",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "copyright": "© 2026 sggoodman",
   "license": "MIT"
 }
