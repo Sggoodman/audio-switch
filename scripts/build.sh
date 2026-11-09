@@ -1,9 +1,10 @@
 #!/bin/bash
 # 构建脚本（mygo 打包链）
-# 用法: ./scripts/build.sh [debug|app|windows-app|all]
+# 用法: ./scripts/build.sh [debug|app|windows-app|linux|all]
 #   debug:       go build 直出二进制（开发调试，隐藏终端 + 调试符号）
 #   app:         mygo build 打 macOS 应用包（.app + .dmg，universal 双架构）
 #   windows-app: mygo build 打 Windows 安装包（纯 Go 交叉编译，无需 mingw）
+#   linux:       mygo build 打 Linux 安装包（.deb + tar.gz）
 #   all:         mygo build 打全平台安装包（darwin universal + windows + linux）
 #
 # 说明：
@@ -66,6 +67,13 @@ build_windows_app() {
     echo "完成，产物在 $OUT_DIR/windows-amd64/"
 }
 
+build_linux() {
+    sync_version "$PKG_VERSION"
+    echo "打包 Linux 安装包（amd64：.deb + tar.gz）..."
+    CGO_ENABLED=0 $MYGO build -platform linux/amd64
+    echo "完成，产物在 $OUT_DIR/linux-amd64/"
+}
+
 build_all() {
     sync_version "$PKG_VERSION"
     echo "打包全平台..."
@@ -85,14 +93,18 @@ case "${1:-}" in
     windows-app)
         build_windows_app
         ;;
+    linux)
+        build_linux
+        ;;
     all)
         build_all
         ;;
     *)
-        echo "用法: $0 [debug|app|windows-app|all]"
+        echo "用法: $0 [debug|app|windows-app|linux|all]"
         echo "  debug:       开发调试二进制（build/ 目录）"
         echo "  app:         macOS .app + .dmg（universal）"
         echo "  windows-app: Windows 安装包（纯 Go，无需 mingw）"
+        echo "  linux:       Linux 安装包（.deb + tar.gz）"
         echo "  all:         全平台安装包"
         exit 1
         ;;

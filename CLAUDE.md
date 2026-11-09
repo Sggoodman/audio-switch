@@ -22,6 +22,9 @@ bash scripts/build.sh app
 # Windows 安装包（mygo build + NSIS：可选安装路径的 setup.exe）
 bash scripts/build.sh windows-app
 
+# Linux 安装包（.deb + tar.gz）
+bash scripts/build.sh linux
+
 # 全平台安装包（darwin universal + windows amd64 + linux amd64）
 bash scripts/build.sh all
 ```
@@ -34,6 +37,9 @@ bash scripts/build.sh all
 - `build.sh windows-app` 产出 `dist/windows-amd64/`：
   - `audio-switch-setup-<version>-amd64.exe` — NSIS 安装器（需 `brew install makensis`）
   - `Audio Switch.exe` — 裸可执行文件
+- `build.sh linux` 产出 `dist/linux-amd64/`：
+  - `audio-switch_<version>_amd64.deb` — Debian 安装包
+  - `audio-switch-<version>-linux-amd64.tar.gz` — 含 install.sh 的安装归档（运行时托盘需 `libayatana-appindicator3`）
 - Windows/Linux 代码全为纯 Go，交叉编译**不再需要 mingw**（CGO_ENABLED=0）
 - macOS 的 CoreAudio 是 cgo，`build.sh` 自动透传 `CGO_ENABLED=1`（仅限 darwin 目标，勿在交叉编译 windows 时开 cgo）
 - 安装包版本号从 git tag 自动同步到 `mygo.json` 的 `version` 字段，**必须先打 tag 再打包**
@@ -136,6 +142,7 @@ logger.Debug("Module", "调试信息", "detail", something)
    ```bash
    bash scripts/build.sh app          # macOS: dist/darwin-universal/*.dmg
    bash scripts/build.sh windows-app  # Windows: dist/windows-amd64/audio-switch-setup-*.exe（需 makensis）
+   bash scripts/build.sh linux        # Linux: dist/linux-amd64/*.deb + *.tar.gz
    ```
 4. 推送代码与标签：
    ```bash
@@ -146,6 +153,8 @@ logger.Debug("Module", "调试信息", "detail", something)
    gh release create vX.Y.Z \
      "dist/darwin-universal/audio-switch-X.Y.Z.dmg" \
      "dist/windows-amd64/audio-switch-setup-X.Y.Z-amd64.exe" \
+     "dist/linux-amd64/audio-switch_X.Y.Z_amd64.deb" \
+     "dist/linux-amd64/audio-switch-X.Y.Z-linux-amd64.tar.gz" \
      --title "vX.Y.Z" \
      --notes "release notes here"
    ```
