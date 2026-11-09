@@ -144,11 +144,15 @@ logger.Debug("Module", "调试信息", "detail", something)
    bash scripts/build.sh windows-app  # Windows: dist/windows-amd64/audio-switch-setup-*.exe（需 makensis）
    bash scripts/build.sh linux        # Linux: dist/linux-amd64/*.deb + *.tar.gz
    ```
-4. 推送代码与标签：
+4. 打包会把 tag 版本号写入 `mygo.json` 的 `version` 字段，**顺手提交这个改动**再推送（避免工作区遗留）：
+   ```bash
+   git add mygo.json && git commit -m "同步 mygo.json 版本号至 vX.Y.Z（打包流程产物）"
+   ```
+5. 推送代码与标签：
    ```bash
    git push origin main vX.Y.Z
    ```
-5. 使用 gh CLI 创建 GitHub Release，上传安装包（而非裸二进制）：
+6. 使用 gh CLI 创建 GitHub Release，上传安装包（而非裸二进制）：
    ```bash
    gh release create vX.Y.Z \
      "dist/darwin-universal/audio-switch-X.Y.Z.dmg" \
